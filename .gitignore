@@ -1,3 +1,4 @@
 repos/
 *.log
 *.tar.gz
+ffmpeg-series/*.sh
