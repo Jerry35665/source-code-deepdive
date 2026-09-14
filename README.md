@@ -5,7 +5,7 @@
 # 源码深读 · 系统开源项目解读系列
 
 > 用 AI 逐行阅读顶级开源项目源码,产出"可对照源码验证"的中文解读卷本。所有行号引用基于明确 pin 的 commit,所有结论可复算、可证伪。
-> **当前进度:五个系列全部完结(163 篇正文 + 120 份调研报告)+ 横向对照 2 篇。**
+> **当前进度:五个系列全部完结(169 篇正文 + 126 份调研报告)+ 横向对照 2 篇。**
 
 ## 一、系列总览
 
@@ -21,7 +21,8 @@
 | 第五系列《Docker 深读》 | 容器运行时(containerd+runc,两卷) | [13 篇正文 + 12 份报告](docker-series/00-导读.md) | commit `f6132db`/`579be22` | ✅ 完结 |
 | 第五系列《Caddy 深读》 | Web 服务器(模块/自动 HTTPS/反代) | [6 篇正文 + 5 份报告](caddy-series/00-导读.md) | commit `56e3a88` | ✅ 完结 |
 | 第五系列《V8 深读》 | JS 引擎执行管线精简卷(堆/解析/解释/对象/GC) | [6 篇正文 + 5 份报告](v8-series/00-导读.md) | commit `c6a1f7c2` | ✅ 完结 |
-| 横向对照 | 十六项目十大横贯模式 + [总目录](cross-series/01-总目录.md) | [2 篇](cross-series/00-横向对照总览.md) | — | ✅ 持续更新 |
+| 第五系列《Prometheus 深读》 | 监控 TSDB(Head/XOR/WAL/compaction/PromQL) | [7 篇正文 + 6 份报告](prometheus-series/00-导读.md) | commit `b0f312b` | ✅ 完结 |
+| 横向对照 | 十七项目十大横贯模式 + [总目录](cross-series/01-总目录.md) | [2 篇](cross-series/00-横向对照总览.md) | — | ✅ 持续更新 |
 | 后续系列 | 候选:Docker 卷二(网络/CNI)/Wireshark/扩展卷 | — | — | 📋 待启动 |
 
 ### 第一系列各卷(65 篇)
@@ -65,7 +66,8 @@ source-code-deepdive/
 ├── curl-series/         第五系列三(传输工具,00-04)
 ├── docker-series/       第五系列四(容器两卷,00-06 卷一 + 07-12 卷二)
 ├── caddy-series/        第五系列五(Web 服务器,00-05)
-└── v8-series/           第五系列六(JS 引擎执行管线,00-05)
+├── v8-series/           第五系列六(JS 引擎执行管线,00-05)
+└── prometheus-series/   第五系列七(监控 TSDB,00-06)
 ```
 
 ## 三、统一规范(质量红线)
@@ -93,4 +95,5 @@ source-code-deepdive/
 - 2026-09-05 ~ 09-10:第一系列八卷交付(选型逻辑"从单机到分布式到 AI",历史规划见 [TRENDS-AND-NEXT-SERIES.md](TRENDS-AND-NEXT-SERIES.md));
 - 2026-09-11 ~ 13:第二系列《FFmpeg 深读》五卷(31 篇)、第三系列《Git 深读》两卷(12 篇)、横向对照特刊、第四系列《PostgreSQL 深读》三卷(15 篇)连续交付;
 - 2026-09-13 ~ 15:第五系列六卷连续交付——zstd(7 篇)、QuickJS(7 篇)、curl(5 篇)、Docker 两卷(13 篇)、Caddy(6 篇)、V8 精简卷(6 篇);总目录收录全部系列;
-- 下一批:后续候选(Docker 卷二网络/CNI、Wireshark 仓库方案、各系列扩展卷)与总目录持续维护。
+- 2026-09-15 凌晨:《Prometheus 深读》卷一(7 篇)夜间批次交付;总目录收录 Prometheus;
+- 下一批:Prometheus 卷二(远程存储/服务发现细节/Rule 引擎)/Docker 卷二(网络/CNI)/Wireshark(仓库方案)。
