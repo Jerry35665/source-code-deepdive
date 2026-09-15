@@ -20,7 +20,7 @@
 | 第五系列《curl 深读》 | 传输工具(Multi 状态机/URL/HTTP 栈/TLS) | [5 篇正文 + 4 份报告](curl-series/00-导读.md) | commit `0b04700` | ✅ 完结 |
 | 第五系列《Docker 深读》 | 容器运行时(containerd+runc,两卷) | [13 篇正文 + 12 份报告](docker-series/00-导读.md) | commit `f6132db`/`579be22` | ✅ 完结 |
 | 第五系列《Caddy 深读》 | Web 服务器(模块/自动 HTTPS/反代) | [6 篇正文 + 5 份报告](caddy-series/00-导读.md) | commit `56e3a88` | ✅ 完结 |
-| 第五系列《V8 深读》 | JS 引擎(两卷:执行管线+编译管线) | [11 篇正文 + 10 份报告](v8-series/00-导读.md) | commit `c6a1f7c2` | ✅ 完结 |
+| 第五系列《V8 深读》 | JS 引擎执行管线精简卷(堆/解析/解释/对象/GC) | [6 篇正文 + 5 份报告](v8-series/00-导读.md) | commit `c6a1f7c2` | ✅ 完结 |
 | 第五系列《Prometheus 深读》 | 监控 TSDB(Head/XOR/WAL/compaction/PromQL) | [7 篇正文 + 6 份报告](prometheus-series/00-导读.md) | commit `b0f312b` | ✅ 完结 |
 | 横向对照 | 十七项目十大横贯模式 + [总目录](cross-series/01-总目录.md) | [2 篇](cross-series/00-横向对照总览.md) | — | ✅ 持续更新 |
 | 后续系列 | 候选:Docker 卷二(网络/CNI)/Wireshark/扩展卷 | — | — | 📋 待启动 |
