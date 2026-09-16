@@ -1,61 +1,65 @@
-# L-集群 Gossip 协议与故障检测深读
+# Redis Cluster Gossip 协议与故障检测深读
 
-> 源码版本：redis commit `e8726d1`（e8726d18e5bab24cbfcb0a0c36f21ce5a1140471）。
-> 所有 文件:行号 为仓库相对路径，已逐一 grep/Read 核对。7.x 后集群实现拆分为
-> `src/cluster.c`（命令入口/重定向）与 `src/cluster_legacy.c`（gossip 核心），
-> 数据结构在 `src/cluster_legacy.h`、`src/cluster.h`。
+> 源码版本:redis commit `e8726d1`(e8726d18e5bab24cbfcb0a0c36f21ce5a1140471,2025-09-15)。
+> 本版本已将集群实现拆分:`src/cluster.c` 是对外 API 壳(1728 行),gossip 协议核心全部在 `src/cluster_legacy.c`(约 6600 行);结构体与协议常量在 `src/cluster_legacy.h`。文中行号均以仓库相对路径标注,已逐一 grep/Read 核对。
 
 ---
 
-## 1. 全景：Gossip 消息传播与 PFAIL→FAIL 状态翻转
+## 1. 全景:一次节点宕机如何在 gossip 网络中翻转成 FAIL
 
-Redis Cluster 是无中心的 gossip 网络：没有 leader，每个节点周期性在 PING/PONG 包里
-捎带（piggyback）一部分"我知道的节点状态"，接收方据此更新本地视图。PING/PONG/
-MEET 是同一种包（`src/cluster_legacy.h:88-93` 注释、`:94-96` 定义），MEET 只是
-"强制收下发送者"的特殊 PING。
+Redis Cluster 的集群总线(cluster bus,端口 = 客户端端口 + 10000,`src/cluster_legacy.h:18`)上所有节点两两之间跑同一套 gossip 消息。PING/PONG/MEET 三种消息**是同一种包**(仅 type 字段不同,`src/cluster_legacy.h:88-101` 的注释明说了这一点),包头携带自己的 slots 位图、currentEpoch、configEpoch,包体携带最多 N/10 条关于**其他节点**的 gossip 条目。
 
 ```
- gossip 扩散（N=6 节点，每包携带 wanted = max(N/10,3) = 3 条节点信息）
-   A ──PING{gossip: B,C,D}──▶ B    A 随机抽 3 个节点状态塞进包尾
-   B ──PONG{gossip: E,F,A}──▶ A    B 回包再捎带自己的 3 条；概率 O(log N) 轮收敛
+ 节点M1 宕机(cluster_node_timeout 超时)
+ ────────────────────────────────────────────────────────────────
+ [阶段1: 各自标记 PFAIL(本地怀疑)]
+   M2 cron 超时未收到 M1 PONG ──► M1.flags |= PFAIL      (本地标)
+   M3 同样怀疑 M1(PFAIL)    M4 还没超时,不怀疑
 
- 节点 X 宕机后的状态翻转流水线：
-   X 超时(> cluster-node-timeout 无 PONG)
-        │  clusterCron 检测 (src/cluster_legacy.c:4832-4836)
-        ▼ 本地标记 PFAIL（"疑似故障"，可自愈）
-        │  后续 PING/PONG 优先携带 PFAIL 节点 (src/cluster_legacy.c:3730-3748)
-        ▼ 其他 master 从 gossip 读到 ⇒ 记入 fail_reports (:2141-2147)
-        │  任一 master 收到 ≥ size/2+1 份报告 (:1892-1900)
-        ▼ 该 master 置 X 为 FAIL 并广播 FAIL 消息 (:1906-1915)
-        ▼ 收到 FAIL 消息的节点无条件置 FAIL (:3201)
-        ▼ X 的从节点发起选举，多数派 master 投票授权后提升为主（见第 5 节）
+ [阶段2: PFAIL 优先 gossip(加速传播)]
+   M2 发 PING 给 M3,gossip 段强制携带 PFAIL 的 M1
+   M3 收到:M1 失败报告 +1 ──► 达到多数?──► 是:
+        M3 本地把 M1 从 PFAIL 翻成 FAIL,
+        并向全网广播 FAIL 消息            ← 唯一的"强制"传播
+
+ [阶段3: FAIL 全网收敛 + 触发选举]
+   M2/M4 收到 FAIL ──► 无条件置 FAIL 标志
+   M1 的从节点 R1 收到多数主投票 ──► 发起选举 ──► 提升为新主
 ```
 
-两级设计的关键：**PFAIL 是"我自己的观察"（单点、可能误判），FAIL 是"集群多数派
-的共识"（权威、触发选举）**。两者是不同 flag 位：`CLUSTER_NODE_PFAIL=4`、
-`CLUSTER_NODE_FAIL=8`（`src/cluster_legacy.h:60-61`），判定宏 `nodeTimedOut(n)`/
-`nodeFailed(n)` 在 `src/cluster_legacy.h:75-76`。核心结构：`clusterNode` 远端节点
-视图（flags、slot 位图、时间戳、fail_reports，`src/cluster_legacy.h:298-332`）；
-`clusterState` 本节点集群视图（epoch、迁移数组、选举状态、lastVoteEpoch，
-`src/cluster_legacy.h:341-390`）；`clusterLink` 总线连接（`:44-55`）；`clusterMsg`
-包头 + 40 字节 gossip 条目（`:230-256`、`:110-120`）。
+要点:阶段 1、2 是**概率性** gossip(随机选节点、每包只带部分视图);阶段 3 的 FAIL 消息和 FAILOVER_AUTH 是**确定性广播**。Redis 用"gossip 收集怀疑 + 多数派确认后广播结论"这两段式,把最终一致的 gossip 和需要强一致语义的决策(谁该被切主)缝合在一起。
+
+### 1.1 消息类型一览(`src/cluster_legacy.h:94-105`)
+
+| type | 名称 | 用途 | 语义强度 |
+|---|---|---|---|
+| 0/1/2 | PING/PONG/MEET | 存活探测 + 配置 + gossip 载荷 | 最终一致 |
+| 3 | FAIL | 宣告某节点 FAIL | 多数派已确认 |
+| 4/10 | PUBLISH/PUBLISHSHARD | 集群内 pub/sub 复制 | 最终一致 |
+| 5/6 | FAILOVER_AUTH_REQUEST/ACK | 选举拉票/投票 | Raft 式多数派 |
+| 7 | UPDATE | 纠正过期 slots 配置 | configEpoch 仲裁 |
+| 8 | MFSTART | 手动 failover 暂停客户端 | 特殊流程 |
+| 9 | MODULE | 模块自定义消息 | — |
+
+包头 `clusterMsg`(`src/cluster_legacy.h:230-256`)关键字段:`currentEpoch`(全局逻辑时钟)、`configEpoch`(每个 slots 配置版本号)、`offset`(复制偏移,用于选最优从节点)、`myslots[16384/8]`(2KB slots 位图)、`count`(gossip 条目数)。协议有 static_assert 锁死各字段偏移(`src/cluster_legacy.h:267-287`),保证滚动升级时 wire 兼容。
+
+### 1.2 核心结构体速览
+
+- `clusterNode`(远端节点视图):flags、configEpoch、slots 位图、`ping_sent`/`pong_received`/`data_received` 三时间戳、`fail_reports` 失败报告链表(`src/cluster_legacy.h:298-332`)。
+- `clusterState`(本节点集群视图):`currentEpoch`、`migrating_slots_to`/`importing_slots_from`/`slots` 三个 16384 数组、选举字段 `failover_auth_*`、投票方字段 `lastVoteEpoch`(`src/cluster_legacy.h:341-390`)。
+- `clusterLink`(总线连接):发送队列、接收缓冲、双向 link(`src/cluster_legacy.h:44-55`)。
 
 ---
 
-## 2. clusterCron 专节：100ms 心跳与随机选点
+## 2. clusterCron 专节:100ms 心跳引擎
 
-clusterCron 由 serverCron 以 **100ms 周期**驱动：`src/server.c:1639-1641`
-`run_with_period(100) { if (server.cluster_enabled) clusterCron(); }`。
-函数本体在 `src/cluster_legacy.c:4674`。每次做的事按序：
+`clusterCron` 定义在 `src/cluster_legacy.c:4674`,由 serverCron 以 100ms 周期驱动(`src/server.c:1639-1640` 的 `run_with_period(100)`)。它每跳做四件事:
 
-**(1) 链接维护**（`:4700-4711`）：超限发送队列立即释放重连（`:4705`）；握手超时
-（`node_timeout`，最小 1 秒，`:4694-4695`）的节点删除。
-
-**(2) 每 10 次迭代（≈1 秒）随机 PING 一个节点**（`:4713-4737`）——"随机选节点"
-的实现：随机性保证探索，偏向最久未联系保证收敛：
+### 2.1 随机选节点发 PING(`src/cluster_legacy.c:4713-4737`)
 
 ```c
-/* src/cluster_legacy.c:4715-4736（节选） */
+/* Ping some random node 1 time every 10 iterations, so that we usually ping
+ * one random node every second. */
 if (!(iteration % 10)) {
     int j;
     /* Check a few random nodes and ping the one with the oldest
@@ -63,7 +67,7 @@ if (!(iteration % 10)) {
     for (j = 0; j < 5; j++) {
         de = dictGetRandomKey(server.cluster->nodes);
         clusterNode *this = dictGetVal(de);
-        /* ... 跳过断链/已有 pending ping/MYSELF/HANDSHAKE 节点 ... */
+        ...
         if (min_pong_node == NULL || min_pong > this->pong_received) {
             min_pong_node = this;
             min_pong = this->pong_received;
@@ -74,327 +78,245 @@ if (!(iteration % 10)) {
 }
 ```
 
-**(3) 保底 PING**（`:4797-4805`）：对"无 pending ping 且 pong 超过 `ping_interval`
-（默认 `cluster_node_timeout/2`，可由隐藏配置 cluster-ping-interval 覆盖，
-`src/config.c:3239`）"的节点补发 PING；半超时无任何数据则强制重连（`:4778-4791`）。
+- 每 **10 个迭代**(即约 1 秒)从节点表**随机抽 5 个**,挑其中 `pong_received` 最旧(最久没消息)的那个发 PING——优先探测"最不新鲜"的节点(行 4715-4736)。
+- 这只是保底;真正的间隔保证在第二个循环里:任何节点的 pong 超过 `ping_interval`(默认 `cluster_node_timeout/2`,`src/cluster_legacy.c:4797-4805`)就立即补发 PING。因此**每个节点对都会在 node_timeout/2 内至少被 ping 一次**——这是源码注释里故障检测概率推导的基础。
+- 半超时无任何流量则强制断链重连(行 4778-4791),应对"连接假死但进程活着"。
 
-**(4) 超时检测 → 标 PFAIL**（`:4818-4844`，详见第 3 节）。
+### 2.2 PFAIL 判定(详见第 3 节,行 4818-4845)
 
-**(5) 从节点事务**（`:4862-4874`）：manual failover、自动 failover、从节点迁移
-（orphaned master 检测在 `:4757-4773`）。gossip 条目如何装入包：`clusterSendPing`
-（`:3630`）决定每包条目数：
+`node_delay = min(now - ping_sent, now - data_received)`,超过 `cluster_node_timeout` 即置 PFAIL。
 
-```c
-/* src/cluster_legacy.c:3668-3674 */
-wanted = floor(dictSize(server.cluster->nodes)/10);
-if (wanted < 3) wanted = 3;
-if (wanted > freshnodes) wanted = freshnodes;
-/* Include all the nodes in PFAIL state, so that failure reports are
- * faster to propagate to go from PFAIL to FAIL state. */
-int pfail_wanted = server.cluster->stats_pfail_nodes;
-```
+### 2.3 从节点 failover 与迁移调度(行 4862-4874)
 
-- 常规条目 = 节点总数/10、至少 3 条，随机抽取（`:3694-3728`）；
-- **所有 PFAIL 节点无条件追加在包尾**（`:3730-3748`）——疑似宕机者的状态以广播
-  级别传播、不受 1/10 采样约束，这就是"加速故障发现"的机制；`stats_pfail_nodes`
-  每轮 cron 开头重新统计（`:4698`）。
+从节点每跳调用 `clusterHandleSlaveFailover()`(行 4865);检测到 orphaned master(有 slots 但无可用从)且自己这边从节点最多时,调用 `clusterHandleSlaveMigration()`(行 4871-4873)。
+
+### 2.4 gossip 条目如何挑选:`clusterSendPing`(`src/cluster_legacy.c:3630`)
+
+- 每包想带的条目数 `wanted = 节点数/10,下限 3`(行 3668-3670)。源码用一段著名注释推导了 1/10 的由来(行 3642-3667):node_timeout*2 的报告有效期内,单个 PFAIL 节点期望被提及 `PROB × 10 × 2×4×N ≈ 80%N`,**必然越过多数派**,还为多节点同时故障留了余量。
+- 随机循环抽取,`maxiterations = wanted*3`(行 3694-3695)防止死循环。
+- **PFAIL 节点 100% 附加携带**(行 3672-3674 计数,行 3730-3749 追加)——这就是"PFAIL 加速通道"的实现:正常节点靠随机撞,疑似故障节点必上车道,让失败报告尽快凑齐多数。
 
 ---
 
-## 3. PFAIL / FAIL 专节：从单点怀疑到多数派共识
+## 3. PFAIL / FAIL 专节:两级故障判定
 
-### 3.1 PFAIL：本地超时即怀疑
+### 3.1 PFAIL:本地怀疑(单点视角)
 
-clusterCron 主循环里（`src/cluster_legacy.c:4829-4844`）：
+`src/cluster_legacy.h:60-61` 定义两级标志:`CLUSTER_NODE_PFAIL`(4,"Failure? Need acknowledge")与 `CLUSTER_NODE_FAIL`(8)。`nodeTimedOut()`/`nodeFailed()` 宏见行 75-76。
+
+判定在 clusterCron 主循环(`src/cluster_legacy.c:4829-4844`):
 
 ```c
-/* src/cluster_legacy.c:4829-4844（节选） */
 mstime_t node_delay = (ping_delay < data_delay) ? ping_delay : data_delay;
+
 if (node_delay > server.cluster_node_timeout) {
+    /* Timeout reached. Set the node as possibly failing if it is
+     * not already in this state. */
     if (!(node->flags & (CLUSTER_NODE_PFAIL|CLUSTER_NODE_FAIL))) {
         node->flags |= CLUSTER_NODE_PFAIL;
         update_state = 1;
-        if (clusterNodeIsMaster(myself) && server.cluster->size == 1)
-            markNodeAsFailingIfNeeded(node);   /* 单节点集群无多数派可问 */
-        /* ...否则仅记日志，等待其他 master 的失败报告... */
+        if (clusterNodeIsMaster(myself) && server.cluster->size == 1) {
+            markNodeAsFailingIfNeeded(node);   /* 单主集群直接走多数(即自己) */
+        } else {
+            serverLog(LL_DEBUG,"*** NODE %.40s possibly failing", node->name);
+        }
     }
 }
 ```
 
-判定依据 `min(ping_delay, data_delay) > cluster_node_timeout`：任何来向的数据
-（含总线 Pub/Sub 流量）都算存活证据（注释 `:4826-4828`）。**PFAIL 可自愈**：
-收到该节点的 PONG 后立刻清除（`src/cluster_legacy.c:3005-3018`）。
+注意"任何总线流量都算存活"(行 4826-4830 注释):`data_received` 在收到该节点任意包时刷新(`src/cluster_legacy.c:2831`),重负载下 PONG 延迟不等于节点死亡。
 
-### 3.2 失败报告的收集
+### 3.2 FAIL:多数派翻转
 
-gossip 解码端（`clusterProcessGossipSection`，`src/cluster_legacy.c:2097`）对每条
-gossip 条目：发送者是 master 且条目带 FAIL/PFAIL 标志时，调
-`clusterNodeAddFailureReport` 记账并尝试翻转 FAIL（`:2140-2147`）；报告"恢复在线"
-则删报告（`:2148-2154`）。报告 `clusterNodeFailReport{node, time}`
-（`src/cluster_legacy.h:81-84`）按 sender 去重、只刷新时间戳
-（`src/cluster_legacy.c:1371-1394`）；过期窗口 `cluster_node_timeout *
-CLUSTER_FAIL_REPORT_VALIDITY_MULT`（2 倍超时，`src/cluster_legacy.c:1401-1415`、
-`src/cluster_legacy.h:22`）。
-
-### 3.3 FAIL：多数派翻转 + 广播
+失败报告的收集在 gossip 段处理 `clusterProcessGossipSection`(`src/cluster_legacy.c:2140-2147`):只有**主节点**发来的、flags 带 FAIL/PFAIL 的 gossip 条目才计入 `clusterNodeAddFailureReport`;若对方报告该节点正常,则删除报告(行 2149-2153)。随后立即尝试翻转:
 
 ```c
-/* src/cluster_legacy.c:1890-1917（节选） */
-void markNodeAsFailingIfNeeded(clusterNode *node) {
-    int needed_quorum = (server.cluster->size / 2) + 1;
-    if (!nodeTimedOut(node)) return;   /* 自己得先 PFAIL */
-    if (nodeFailed(node)) return;      /* 已是 FAIL */
+void markNodeAsFailingIfNeeded(clusterNode *node) {          /* 1890 */
+    int failures;
+    int needed_quorum = (server.cluster->size / 2) + 1;      /* 1892 */
+
+    if (!nodeTimedOut(node)) return;   /* We can reach it. */
+    if (nodeFailed(node)) return;      /* Already FAILing. */
+
     failures = clusterNodeFailureReportsCount(node);
-    /* Also count myself as a voter if I'm a master. */
+    /* Also count myself as a voter if I'm a master. */     /* 1898 */
     if (clusterNodeIsMaster(myself)) failures++;
-    if (failures < needed_quorum) return;   /* 未达多数派 */
+    if (failures < needed_quorum) return;  /* No weak agreement from masters. */
     ...
-    node->flags &= ~CLUSTER_NODE_PFAIL;
+    node->flags &= ~CLUSTER_NODE_PFAIL;                      /* 1906 */
     node->flags |= CLUSTER_NODE_FAIL;
-    clusterSendFail(node->name);            /* 广播 FAIL 消息 */
-}
+    node->fail_time = mstime();
+    clusterSendFail(node->name);       /* 广播 FAIL,强制全网翻转 */  /* 1915 */
 ```
 
-要点：
+- 多数派 = `size/2 + 1`,其中 `size` 是**持有至少一个 slot 的主节点数**(`src/cluster_legacy.h:345`,计算在 `src/cluster_legacy.c:5134-5144`)。
+- 每份报告有时效:超过 `2 × node_timeout`(`CLUSTER_FAIL_REPORT_VALIDITY_MULT`,`src/cluster_legacy.h:22`)自动清除(`src/cluster_legacy.c:1401-1415`)——过期的怀疑不算数,防止陈旧报告永久污染。
 
-- 法定人数 = **持槽 master 总数 size 的一半 + 1**（size 定义见
-  `src/cluster_legacy.c:5134-5144`）；自己的一票仅在自己为 master 时计入。
-- 翻转后清 PFAIL、置 FAIL，并 `clusterSendFail` 向全网广播
-  （`:3836-3841`："forcing all the other reachable nodes to flag the node as FAIL"）。
-- 接收端对 FAIL 消息**不做验证**直接置 FAIL（`src/cluster_legacy.c:3190-3206`），
-  信任来自"FAIL 只由已达成多数派的节点发出"这一协议约定。
-- **FAIL 撤销**：`clearNodeFailureIfNeeded`（`:1922-1952`）——slave/无槽 master
-  可达即清；持槽 master 须等 `cluster_node_timeout * CLUSTER_FAIL_UNDO_TIME_MULT`
-  （2 倍超时，`src/cluster_legacy.h:23`）且无人接管其槽才清，防抖动后双主。
+### 3.3 撤销条件(FAIL 是可逆的)
 
-### 3.4 1/10 条目数的概率推导（源码注释自证）
-
-`src/cluster_legacy.c:3642-3667` 注释给出完整数学：N 节点、每包 N/10 条、
-`node_timeout*2` 有效窗内两两至少交换 8 个包，单个 PFAIL 节点期望收到
-`1/N × N/10 × 8N = 0.8N` 份报告——稳超多数派（N/2+1），并为多节点同时宕机留
-余量。这是"消息量 vs 收敛速度"的折中：每包条目数随 N 线性增长，全网每秒约
-O(N²/2) 个小包（每节点约 10 包/秒）。
+- **PFAIL 自愈**:收到该节点 PONG 即清 PFAIL(`src/cluster_legacy.c:3015-3018`)——瞬时抖动不需外力即撤销。
+- **FAIL 撤销** `clearNodeFailureIfNeeded`(`src/cluster_legacy.c:1922`):从节点/无 slots 主节点,重新可达即清(行 1929-1936);**有 slots 的主节点**必须同时满足"重新可达 + 已过 `2 × node_timeout` 仍无人接管它的 slots"(行 1942-1944,`CLUSTER_FAIL_UNDO_TIME_MULT`,`src/cluster_legacy.h:23`)才清——如果它的 slots 已被新主接管,FAIL 就地固化,旧主回来只能作为从节点重新加入。
+- **FAIL 单向强制**:收到 FAIL 消息无条件置位(`src/cluster_legacy.c:3190-3206`),不需要自己有失败报告;黑名单机制(`CLUSTER_BLACKLIST_TTL` 60 秒,`src/cluster_legacy.c:1813`)防止被踢出的节点被 gossip 立即加回。
 
 ---
 
-## 4. Slots 迁移专节：SETSLOT 状态机（IMPORTING/MIGRATING/STABLE）
+## 4. Slots 迁移专节:SETSLOT 状态机
 
-槽归属本身走 gossip 传播（包头 `myslots` 16384 位位图 + `configEpoch`，接收端
-`clusterUpdateSlotsConfigWith`（`src/cluster_legacy.c:2330`）按"configEpoch 大者赢"
-重绑 slot：`:2379-2401`）。但**在线 reshard 需要原子地搬 key**，于是每个槽还有
-两个附加状态，存在 clusterState 的两个 16384 项数组：`migrating_slots_to[]`
-（我是源、正迁给谁）与 `importing_slots_from[]`（我是目标、从谁导入）
-（`src/cluster_legacy.h:349-350`）。
-
-CLUSTER SETSLOT 子命令实现（`src/cluster_legacy.c:6078-6206`）构成状态机：
-
-| 子命令 | 前置校验 | 副作用 | 行号 |
-|---|---|---|---|
-| `SETSLOT s MIGRATING id` | 我必须是 s 的 owner；目标是 master | `migrating_slots_to[s]=n` | :6093-6108 |
-| `SETSLOT s IMPORTING id` | 我必须不是 owner；源是 master | `importing_slots_from[s]=n` | :6109-6125 |
-| `SETSLOT s STABLE` | — | 两个数组槽位清 NULL（迁移失败回滚用） | :6126-6129 |
-| `SETSLOT s NODE id` | 我名下还有 s 的 key 则拒绝（:6144-6150） | `clusterDelSlot(s)` + `clusterAddSlot(n,s)`；若 n 是自己则 bump configEpoch 并广播 PONG | :6130-6199 |
-
-`SETSLOT NODE` 的收尾值得注意（`:6180-6199`）：导入方把槽划给自己时调
-`clusterBumpConfigEpochWithoutConsensus`（`:1709-1726`）单方面抬高 configEpoch
-——reshard 不走选举、没有多数派背书，必须让新配置 epoch 严格大于旧配置才能在
-gossip 中胜出；随后 `clusterBroadcastPong(CLUSTER_BROADCAST_ALL)`（`:6198`）立刻
-向全网广播，不等 gossip 慢慢扩散。`clusterAddSlot`/`clusterDelSlot`
-（`:5010-5018`/`:5023-5037`）维护节点位图 + 全局 `slots[]` 数组；ADDSLOTS/
-DELSLOTS 批量版走 `clusterUpdateSlots`（`:5630-5646`，顺带清 importing 状态）。
-
-迁移期间的客户端路由（`src/cluster.c:1276-1305`）：slot 迁出且 key 不在本节点
-→ **ASK** 重定向到目标；多 key 且部分已搬走 → **TRYAGAIN**（错误串
-`src/cluster.c:1336-1340`）；目标节点只服务带 ASKING 标记的请求（`:1296-1305`）。
-
-一个防脑裂细节：gossip 发现"sender 不再声称持有某槽"时不立即解绑，只打
-`owner_not_claiming_slot` 位图（`src/cluster_legacy.c:2402-2411`；语义注释
-`src/cluster_legacy.h:382-387`；`isSlotUnclaimed` 宏 `:116-118`）——避免迁移窗口
-内把"源还在搬 key"误判成"槽无主"而把集群打成 CLUSTER_FAIL。
-
----
-
-## 5. Failover 专节：从节点提升的投票算法
-
-### 5.1 两个纪元
-
-- `currentEpoch`：集群逻辑时钟，节点**发起选举时自增**、包间取最大值传播
-  （`src/cluster_legacy.c:2833-2844`，自增点 `:4382`）；
-- `configEpoch`：配置版本（slot 归属的 last-writer-wins 时间戳），当选后设为
-  当选纪元（`:4402-4407`）。
-
-### 5.2 从节点侧：发起选举（clusterHandleSlaveFailover，:4245）
-
-前置条件（`:4273-4283`）：自己是 slave、主节点 FAIL（manual failover 除外）、
-主节点持槽；数据新鲜度检查 `cluster-slave-validity-factor`（`:4304-4313`）。
-
-**选举延迟算法**（`:4317-4345`）：
+槽状态存放在 `clusterState` 的两个数组(`src/cluster_legacy.h:349-350`):`migrating_slots_to[slot]`(我的 slot 正迁往谁)与 `importing_slots_from[slot]`(我正从谁那导入 slot)。命令入口 `CLUSTER SETSLOT` 在 `src/cluster_legacy.c:6078-6206`:
 
 ```c
-/* src/cluster_legacy.c:4318-4328（节选） */
+} else if (!strcasecmp(c->argv[3]->ptr,"migrating") && c->argc == 5) {   /* 6093 */
+    if (server.cluster->slots[slot] != myself) { ... }      /* 必须是 owner */
+    server.cluster->migrating_slots_to[slot] = n;           /* 6108 */
+} else if (!strcasecmp(c->argv[3]->ptr,"importing") && c->argc == 5) {   /* 6109 */
+    if (server.cluster->slots[slot] == myself) { ... }      /* 不能是 owner */
+    server.cluster->importing_slots_from[slot] = n;         /* 6125 */
+} else if (!strcasecmp(c->argv[3]->ptr,"stable") && c->argc == 4) {      /* 6126 */
+    /* CLUSTER SETSLOT <SLOT> STABLE */
+    server.cluster->importing_slots_from[slot] = NULL;      /* 6128 */
+    server.cluster->migrating_slots_to[slot] = NULL;
+```
+
+状态机与配套行为:
+
+```
+        STABLE ──SETSLOT n MIGRATING X──►  MIGRATING(源)
+           ▲   (owner 执行;6108)          读:照常;写:KEYS 不在则 -ASK 转向目标
+           │                                MIGRATE 命令逐 key 搬运(redis-cli --cluster)
+           │                          ◄──SETSLOT n IMPORTING self(6125,目标执行)
+           │                                写:ASKING 打标后可写;否则 -MOVED
+        STABLE ◄──SETSLOT n STABLE(6126)  迁移中途放弃/清障(redis-cli 4888 自动重试)
+           ▲
+           └── 两端各执行 SETSLOT n NODE target(6130-6161)
+               owner 侧校验槽内已无 key(6144-6150)
+               clusterDelSlot + clusterAddSlot 改所有权(6160-6161)
+```
+
+几个深藏的实现细节:
+
+- **手动迁移绕过选举**:`SETSLOT n NODE` 把 slot 划给自己时,若正处 IMPORTING 状态,调用 `clusterBumpConfigEpochWithoutConsensus()` 单方面抬升 configEpoch(行 6180-6194),随后 `clusterBroadcastPong(CLUSTER_BROADCAST_ALL)` 立刻全网广播(行 6198)。注释明说:若与别的节点的 epoch 撞车,由 `clusterHandleConfigEpochCollision()` 事后仲裁(该函数在 `src/cluster_legacy.c:3179-3183` 被调用)。
+- **腾空主自动降级为从**:划走自己最后一个 slot 且开启 replica-migration 时,`clusterSetMaster(n)` 把自己变成新主的从节点(行 6163-6176)。
+- **收尾兜底**:nodes.conf 持久化在行 6205 `clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG|...)`。
+- 迁移期间的客户端语义由 `getMigratingSlotDest/getImportingSlotSource`(`src/cluster.h:138-139`)接入 ASK/MOVED 重定向(重定向错误码定义 `src/cluster.h:30-37`)。
+
+---
+
+## 5. Failover 专节:从节点提升的投票算法
+
+### 5.1 发起方(从节点):`clusterHandleSlaveFailover`(`src/cluster_legacy.c:4245`)
+
+前置条件(行 4273-4283):我是从节点、我的主被标 FAIL(或手动 failover)、未禁 failover、主持有 slots。
+
+**数据新鲜度门槛**(行 4287-4313):断连时长减去 node_timeout 后,不得超过 `repl_ping_slave_period + node_timeout × cluster-replica-validity-factor`,太旧的从节点不许参选。
+
+**排序延迟**(行 4317-4346)——防脑裂的核心:
+
+```c
 server.cluster->failover_auth_time = mstime() +
     500 + /* Fixed delay of 500 milliseconds, let FAIL msg propagate. */
     random() % 500; /* Random delay between 0 and 500 milliseconds. */
+server.cluster->failover_auth_count = 0;
 server.cluster->failover_auth_rank = clusterGetSlaveRank();
-/* 1 second * rank：复制偏移越旧排名越大、延迟越久 */
-server.cluster->failover_auth_time +=
-    server.cluster->failover_auth_rank * 1000;
+/* We add another delay that is proportional to the slave rank.
+ * Specifically 1 second * rank. This way slaves that have a probably
+ * less updated replication offset, are penalized. */
+server.cluster->failover_auth_time += server.cluster->failover_auth_rank * 1000;
 ```
 
-rank = 同主从节点中复制偏移比自己新的个数（`clusterGetSlaveRank`，`:4113-4128`）。
-固定 500ms 等 FAIL 传播，0-500ms 随机打散，rank×1s 惩罚落后者——**数据最新的
-从节点几乎总是先发起选举**，降低选票分裂概率；rank 变差还会动态追加延迟
-（`:4353-4366`）。到点后（`:4381-4392`）：`currentEpoch++`、记录
-`failover_auth_epoch`、向所有节点广播 FAILOVER_AUTH_REQUEST（`:3963-3973`）。
-票数 ≥ `size/2+1`（`:4248`、`:4395`）即获胜：configEpoch 抬到当选纪元，接管旧主
-全部 slot，`clusterBroadcastPong` 广播新配置（`clusterFailoverReplaceYourMaster`，
-`:4207-4235`）。
+rank 由 `clusterGetSlaveRank()`(`src/cluster_legacy.c:4113-4129`)计算:复制偏移比我新的兄弟从节点个数。数据最新的从节点 rank=0、最快发起选举;rank 之间错开 1 秒 + 随机 500ms,天然避免多从同时拉票。期间 rank 变差还会动态追加延迟(行 4353-4366)。
 
-### 5.3 主节点侧：投票规则（clusterSendFailoverAuthIfNeeded，:3998）
+**拉票与计票**(行 4380-4413):到点后 `currentEpoch++`,以 `failover_auth_epoch = currentEpoch` 广播 AUTH_REQUEST(行 4382-4387,发送函数 `clusterRequestFailoverAuth` 在行 3963,手动 failover 会打 FORCEACK 标志);收到多数派 ACK(`failover_auth_count >= size/2+1`,行 4395)即获胜,把自己的 configEpoch 抬到选举 epoch(行 4402-4407),`clusterFailoverReplaceYourMaster()`(定义于 `src/cluster_legacy.c:4207`)接管 slots、广播 PONG 让全网更新拓扑。计票侧校验:ACK 只在"发送方是有 slots 的主 + 其 currentEpoch ≥ 我的选举 epoch"时有效(行 3239-3251)。
 
-```c
-/* src/cluster_legacy.c:4010-4032（节选，五道否决闸门） */
-if (nodeIsSlave(myself) || myself->numslots == 0) return;      /* ① 只有持槽 master 有投票权 */
-if (requestCurrentEpoch < server.cluster->currentEpoch) return;/* ② 纪元过期 */
-if (server.cluster->lastVoteEpoch == server.cluster->currentEpoch)
-    return;                                                    /* ③ 本纪元已投过票 */
-if (clusterNodeIsMaster(node) || master == NULL ||
-    (!nodeFailed(master) && !force_ack)) return;               /* ④ 候选的主必须 FAIL（手动 failover 凭 FORCEACK 豁免） */
-...
-if (mstime() - node->slaveof->voted_time < server.cluster_node_timeout * 2)
-    return;                                                    /* ⑤ 同一主的选举 2×超时内只投一次 */
-for (j = 0; j < CLUSTER_SLOTS; j++) { ... /* ⑥ 候选声称的槽，其现主 configEpoch 不得更大 */ }
-server.cluster->lastVoteEpoch = server.cluster->currentEpoch;  /* 落票 */
-node->slaveof->voted_time = mstime();
-clusterSendFailoverAuth(node);
-```
+### 5.2 投票方(主节点):`clusterSendFailoverAuthIfNeeded`(`src/cluster_legacy.c:3998`)
 
-`lastVoteEpoch` 是 raft "一任期一票"的等价物（`src/cluster_legacy.h:372`）：
-**同一纪元每个 master 只能授出一票**，保证同一纪元最多只有一个从节点能凑齐
-多数派——防双主的核心。ACK 有效性还要求发送者是持槽 master 且
-`senderCurrentEpoch >= failover_auth_epoch`（`:3239-3251`）。
+五道否决闸门:
 
-### 5.4 手动 failover（CLUSTER FAILOVER）
+1. **投票资格**:自己必须是有 slots 的主(`src/cluster_legacy.c:4006-4010`)。
+2. **epoch 单调**:请求 epoch < 我的 currentEpoch 则拒绝(行 4016-4023)。
+3. **一 epoch 一票**:`lastVoteEpoch == currentEpoch` 说明本 epoch 已投过,拒绝(行 4026-4032)。
+4. **主必须 FAIL**(或手动 failover 的 FORCEACK,行 4034-4054);同一主的两票间隔至少 `2 × node_timeout`(行 4056-4068)。
+5. **slot epoch 仲裁**:请求方声称的任何 slot,其现 owner 的 configEpoch 若更大,拒绝(行 4070-4090)。
 
-命令入口 `src/cluster_legacy.c:6293-6347`，三种模式：
+通过后 `lastVoteEpoch = currentEpoch` 并回 ACK(行 4093-4098)。`lastVoteEpoch` 持久化在 `clusterState`(`src/cluster_legacy.h:372`),重启不丢,保证"一个 epoch 只投一票"跨重启成立。
 
-- **默认**：从节点向主发 MFSTART（`:6345`），主暂停客户端写（`:3252-3263`，时长
-  `CLUSTER_MF_TIMEOUT*2`，`src/cluster_legacy.h:24-25`）并在 PING 上打 PAUSED
-  标志（`:3599-3600`）；从节点拿到主的 `mf_master_offset`（`:2850-2862`）并追平
-  复制流后置 `mf_can_start`（`:4584-4605`，追平判定 `:4594-4597`）——**零数据
-  丢失**的先决条件。
-- **FORCE**：跳过与主协调，直接置 `mf_can_start`（`:6337-6342`），可能丢最新写入。
-- **TAKEOVER**：连投票都不要，自抬 epoch 后直接接管（`:6329-6336`），灾难恢复用。
-投票请求带 `CLUSTERMSG_FLAG0_FORCEACK`（`:3967-3970`），使投票闸门④对"主还活着"
-豁免（`:4036-4038`）。
+### 5.3 手动 failover 快路径
+
+`CLUSTER FAILOVER` 走 MFSTART 消息(`src/cluster_legacy.c:3252-3271`):主收到后暂停客户端写(pause 时长 = `CLUSTER_MF_TIMEOUT × CLUSTER_MF_PAUSE_MULT`,`src/cluster_legacy.h:24-25`),把自己的复制偏移经 PONG 带回从节点(行 2850-2862 填 `mf_master_offset`);从节点追平 offset 后 `mf_can_start` 置位(行 4541-4589 注释所述流程),**零延迟**发起选举,且投票方收到 FORCEACK 后即使主还活着也放行(行 4003、4037-4038)。这是"数据不丢换主"的受控通道。
 
 ---
 
-## 6. 设计动机：为什么 gossip 而非 raft
+## 6. 设计动机:为什么 gossip 而非 Raft?
 
-**为什么用 gossip 做拓扑/故障检测**：
+**为什么数据面用 slots + gossip,而选举却长得像 Raft?** Redis 的取舍是"分而治之":
 
-1. **去中心化**：加节点只需 `CLUSTER MEET` 一条边（`src/cluster_legacy.c:5974-6001`
-   → `clusterStartHandshake` `:1981-2036`），其余靠 gossip 自动发现（只信任"已知节点"
-   转发的条目 `:2199-2211`，黑名单防复活 `:1813`），无 etcd 式"先选举才能服务"的引导期。
-2. **故障检测连续且本地化**：每个节点对自己的 TCP 链路做超时检测（PFAIL），
-   无需 leader 仲裁即可第一时间感知；共识（FAIL）只在"要采取动作（选举）"时才
-   需要。raft 心跳全汇聚到 leader，leader 故障反而要等重选才恢复检测。
-3. **消息量可控**：每节点约 10 包/秒（100ms cron + 每 1s 随机选点），每包
-   O(N/10) 条目，全网 O(N²/10) 条目/秒；raft 元数据日志复制每条变更 O(N) 且全过
-   leader，元数据频繁变化时写放大明显。
+- **成员与拓扑信息**(谁在线、谁持有哪些 slots)是**大批量、低价值密度、容忍陈旧**的数据。16384 slots 位图 + N 个节点状态,用 gossip 概率传播即可收敛,无需逐条确认。gossip 每包固定携带 2KB slots 位图(`src/cluster_legacy.h:244`)+ N/10 条邻居摘要,带宽 O(N) 且恒定——这是 etcd(Raft 要求日志复制到每个成员)在几百节点下会先撑爆的地方。
+- **故障判定与主切换**是**小批量、高价值**的决策。Redis 把这两件事从 gossip 里摘出来:PFAIL→FAIL 需要多数主确认(第 3 节),切主需要多数主投票(第 5 节)——**gossip 负责发现,多数派负责定论**。准确说法是:Redis Cluster = gossip(最终一致的成员/配置传播)+ Raft 式多数派选举(安全的 epoch 单调投票),而不是"纯 gossip"。
 
-**为什么 failover 又退化成 raft 式多数派投票**：slot 归属是正确性敏感状态，双主
-写真丢数据，gossip 的最终一致不足以决定"谁接班"。于是 Redis 在**唯一需要强一致
-的那个点**（选举）引入 raft 同构机制：单调纪元（currentEpoch ≈ term）、一纪元
-一票（lastVoteEpoch）、多数派授权、当选纪元作为 configEpoch 压制旧配置；其余状态
-（成员表、slot 映射、PFAIL 传闻）全部交给 gossip 最终一致。
+**为什么 PFAIL/FAIL 要分两级?**
 
-**对比总结**：
+1. **单点怀疑不可信**:网络抖动、总线拥塞都会造成假超时。PFAIL 只是本地"嫌疑",必须凑齐 `size/2+1` 份独立报告(且报告者必须是主)才翻转成 FAIL,把误判率压到需要**多数节点同时误判**的水平。
+2. **翻转即广播,收敛 O(1) 跳**:一旦确认,不再靠概率 gossip 慢慢磨,而是 `clusterSendFail` 直接全网广播(行 1915)。PFAIL 阶段靠 gossip 收集报告(PFAIL 条目 100% 附带,行 3730-3749),FAIL 之后靠广播——**慢收集快结论**。
+3. **可逆性分层**:PFAIL 见 PONG 即撤销(行 3015-3018);FAIL 撤销要过 `2×node_timeout` 冷却且确认无人接管 slots(行 1942-1944)。故障检测"宽进严出",避免振荡。
 
-| 维度 | Redis Cluster gossip | etcd / raft |
+**gossip 收敛速度与消息量的定量直觉**(源码自带推导,`src/cluster_legacy.c:3642-3667`):node_timeout 内每对节点至少交换 4 个包(半超时保底 PING + 对方 PING 的响应),报告有效期 2×node_timeout,故每个 PFAIL 节点在有效期内被提及的期望次数 ≈ `(1/N) × (N/10) × 8N/10 ≈ 0.8N`,**必然越过多数派**,还容忍 20% 的节点不在环上(挂了一部分时剩下的也能凑多数)。
+
+**与 etcd/Raft 的对比总结**:
+
+| 维度 | Redis Cluster | etcd / Raft |
 |---|---|---|
-| 一致性模型 | 最终一致（configEpoch 冲突取大） | 线性一致（日志复制+多数派提交） |
-| 角色 | 对等，无 leader | 强 leader |
-| 故障检测 | 全员互检，本地 PFAIL + 多数派 FAIL | leader 心跳，租约/选举超时 |
-| 元数据操作 | 管理命令+gossip 扩散，无事务 | 经 raft 日志，强一致事务 |
-| 脑裂防护 | minority 侧置 CLUSTER_FAIL 拒写（`src/cluster_legacy.c:5148-5157`） | 少数派直接失去 quorum |
-| 复杂度成本 | 冲突消解规则散落（epoch 碰撞 `:1774-1789`、owner_not_claiming_slot） | 单一状态机，但必须部署奇数节点 |
+| 一致性模型 | slots 配置最终一致(gossip),决策多数派 | 全部经 Raft 日志强一致 |
+| 心跳/成员 | gossip PING,PFAIL 本地怀疑 | leader 心跳,follower 超时 |
+| 选主 | 从节点拉票,epoch 单调,一 epoch 一票 | 任意成员拉票,term 单调,一 term 一票 |
+| 数据安全 | 异步复制,**可能丢最近写入** | 多数派落盘才提交,**不丢已提交** |
+| 扩缩容 | 原生 slots 迁移(第 4 节) | 无内建分片,靠上层 |
+| 规模上限设计 | 数百~千节点,gossip 带宽 O(N) | 通常 ≤ 7~9 投票成员 |
 
-值得注意：Redis Cluster 并非"不能 raft"，而是**把 raft 缩小到选举一个事务**，
-其余信息量大的状态（16K 位 slot 位图 × N 节点）走廉价传播。代价是正确性论证
-分散：epoch 碰撞消解（`:1774-1789`）、无共识抬 epoch 的例外（`:1700-1708` 注释
-明说 may violate）、dirty slot 删 key（`:2462-2463`）都是最终一致性的补丁。
-
-**PFAIL/FAIL 两级的动机**：直接把"超时"当 FAIL 会因单点网络抖动触发无谓选举；
-把"等多数派确认"当第一级又让每个节点的状态机依赖全网信息。两级把"敏感但本地"
-的检测与"迟钝但权威"的共识解耦：PFAIL 免费加速 gossip 传播（`:3730-3748`），
-FAIL 才有资格触发选举（`:4275`）。
+Redis 选举与 Raft 的同构点很直白:`currentEpoch`≈term、`lastVoteEpoch`≈votedFor、多数 ACK≈quorum;差异在投票者资格(Redis 只算有 slots 的主)、候选人按复制进度排序,以及 Redis **不保证**新主拥有全部已确认写入(异步复制),这是它与 Raft 最本质的语义鸿沟。
 
 ---
 
 ## 7. FAQ 素材
 
-1. **集群总线端口是多少？** 客户端端口 + 10000（`CLUSTER_PORT_INCR`，`src/cluster_legacy.h:18`；`src/cluster_legacy.c:5991`）。
-2. **PING/PONG/MEET 区别？** 完全相同的包结构，MEET 是"必须收下发送者"的特殊
-   PING（`src/cluster_legacy.h:88-93`）；gossip 学到的未知节点只建表不握手，
-   防误入别的集群（`src/cluster_legacy.c:2200-2208`）。
-3. **cluster-node-timeout 影响哪些参数？** 至少六个：PFAIL 阈值（`:4832`）、保底
-   ping 间隔的一半（`:4797-4798`）、失败报告有效期×2（`:1406-1407`）、FAIL 撤销
-   窗口×2（`:1942-1944`）、选举 auth_timeout×2（`:4262-4263`）、同主重复投票
-   冷却×2（`:4059`）。
-4. **每个 gossip 包带多少条节点信息？** 节点数/10、最少 3 条、额外全量携带 PFAIL 节点（`src/cluster_legacy.c:3668-3674,3730-3748`）。
-5. **PFAIL/FAIL 能自愈吗？** PFAIL 收到 PONG 即自愈（`:3015-3018`）；FAIL 须
-   `clearNodeFailureIfNeeded`：slave/无槽 master 可达即清，持槽 master 需等
-   2×timeout 且无人接管其槽（`:1922-1952`）。
-6. **从节点能投票吗？** 不能。只有持 ≥1 slot 的 master 有投票权
-   （`src/cluster_legacy.c:4010`），quorum 基数 size 也只统计持槽 master（`:5134-5144`）。
-7. **收到 FAIL 消息为什么敢直接信？** 协议约定只有达成多数派才广播 FAIL；
-   若 majority 实际不存在，FAIL 会按时间窗被清掉（`src/cluster_legacy.c:1880-1888` 注释）。
-8. **手动 failover 为什么不丢数据？** 主先暂停写（`:3261-3263`），从追平复制流
-   （offset 相等，`:4594-4597`）才开始选举；投票请求带 FORCEACK 使主可对
-   "活着的自己"豁免闸门④（`:3967-3970`、`:4036-4038`）。
-9. **迁移中 key 一半在源一半在目标怎么办？** 源 ASK 重定向；多 key 部分缺失
-   返回 TRYAGAIN（`src/cluster.c:1281-1305`），客户端须向目标发 ASKING。
-10. **为什么 CLUSTER FORGET 后节点不会被 gossip 复活？** FORGET 把节点 ID 放入
-    黑名单，TTL 60 秒内 gossip 不再重新添加（`src/cluster_legacy.c:1798-1813`）。
+1. **PFAIL 和 FAIL 的区别?** PFAIL(4 号位)是单个节点本地超时怀疑(`src/cluster_legacy.c:4836`);FAIL(8 号位)是收到 `size/2+1` 份主节点失败报告后的翻转结论(`src/cluster_legacy.c:1890-1917`)。只有 FAIL 会广播(行 1915)并触发从节点选举(`src/cluster_legacy.c:4275`)。
+2. **cluster-node-timeout 调小会怎样?** 检测更快,但 PING 间隔(默认 timeout/2,行 4797-4798)、失败报告有效期(2×timeout)、投票节流(2×timeout,行 4059)、FAIL 撤销冷却全部随之缩短,误判与振荡风险上升。
+3. **为什么每包只 gossip N/10 个节点,下限 3?** 源码推导(行 3642-3667):保证 PFAIL 节点在 2×timeout 有效期内被提及次数期望 ≈ 80%N,必然过多数;下限 3 保证小集群也有基本冗余。
+4. **gossip 会不会把别家集群的节点拉进来?** 不会。gossip 段只接受**已认识节点**发来的未知节点信息(`src/cluster_legacy.c:2209-2211`),且 node ID 是随机 40 字节;被移除的节点 ID 进黑名单 60 秒(行 1813)。MEET 是唯一强制加节点的入口(行 2897-2916)。
+5. **MEET 和 PING 到底差在哪?** 同一种包不同 type。接收方对未知发送者:收到 PING 不会加节点(防误入),收到 MEET 强制创建 HANDSHAKE 节点(行 2897-2916)。MEET 标志在首包发出后即清除(行 3394-3400 附近,`clusterSendPing(link, node->flags & CLUSTER_NODE_MEET ? MEET : PING)` 在行 3386-3388)。
+6. **一个主节点能投两票吗?** 不能。`lastVoteEpoch == currentEpoch` 直接拒绝(行 4026-4032),且 lastVoteEpoch 持久化(行 4093 + `src/cluster_legacy.h:372`),重启也不重投。
+7. **多个从节点同时选举怎么办?** rank 延迟错峰:500ms 随机 + rank×1000ms(行 4318-4328),复制偏移最新的先选;同一主的两票间隔 2×timeout(行 4059)进一步保证一个 epoch 内基本只有一人获票。
+8. **主从分区时集群还写吗?** 可达主节点数低于多数派(`reachable_masters < size/2+1`,`src/cluster_legacy.c:5150-5157`)或开了 require-full-coverage 且 slots 有洞(行 5114-5123)时,全局转 CLUSTER_FAIL,拒绝写入(-CLUSTERDOWN)。少数派分区自动只读。
+9. **手动 failover 为什么不丢数据?** MFSTART 让主暂停写(行 3261-3263),从节点追平复制偏移才开始选举(PONG 携带 offset,行 2850-2862),本质是受控换主。
+10. **slots 迁移一半时 key 请求怎么路由?** 源节点 MIGRATING 状态对不存在的 key 回 ASK;目标节点 IMPORTING 状态凭 ASKING 标志放行写(`src/cluster.h:33` 的 CLUSTER_REDIR_ASK 语义)。
 
-## 深挖话题
+## 8. 深挖线索
 
-1. **1/10 冗余度的概率证明**：`src/cluster_legacy.c:3642-3667` 注释推导——
-   2×timeout 有效窗内单个 PFAIL 节点期望收到 0.8N 份报告（>多数派），为多节点
-   同时故障留余量；"最少 3 条"使 N<30 的小集群实际比例更高。
-2. **configEpoch 碰撞消解**：两 master 同 epoch 时，nodeID 字典序大者永不动、
-   小者 bump（`src/cluster_legacy.c:1774-1789`）；新集群全员 epoch=0 也靠它自愈。
-3. **owner_not_claiming_slot 位图**：owner 停止声称某槽时观察者不解绑只记账
-   （`src/cluster_legacy.c:2402-2411`、`src/cluster_legacy.h:382-387`）——gossip
-   系统"不传播不确定信息"的范例。
-4. **选举 rank 延迟**：`500 + rand(500) + rank×1000ms`（`:4317-4334`），数据最旧者
-   被逐秒惩罚；manual failover 全免延迟。可对比 raft 的 randomized election timeout。
-5. **信任边界**：gossip 新节点添加要求 sender 本身已知（`:2209-2211`），MEET 是
-   唯一信任注入点——这防止 IP/端口复用时把两个独立集群意外合并（注释 `:2200-2204`）。
+1. **cluster_msg 的 2KB slots 位图是 gossip 的"重"所在**:`src/cluster_legacy.h:244`。N 节点集群全互联 PING 下总线流量 ≈ O(N²) 个 2KB 包/timeout 周期,千节点规模要重新审视 cluster-ping-interval(可调,行 4797)。
+2. **`clusterHandleConfigEpochCollision`**:手动迁移撞 epoch 的事后仲裁(`src/cluster_legacy.c:3179-3183` 调用点),研究"无共识 epoch 提升"如何自愈,是理解 Redis 弱共识边界的好切口。
+3. **`owner_not_claiming_slot` 位图**(`src/cluster_legacy.h:382-387`):迁移中 owner 停止声称 slot 后,防止其他节点用 UPDATE 消息把错误归属"纠正"回去——slot 迁移与 gossip 冲突的微妙边界。
+4. **FAIL 消息的权限模型**:任何已知节点(含从节点)发来的 FAIL 都被接受(行 3193-3206),而 PFAIL 报告只认主节点(行 2140)——因为 FAIL 本身是别人多数派确认的结果,从节点只是中继;UPDATE 消息同理(行 3272-3293)。
+5. **`clusterUpdateSlotsConfigWith`**(`src/cluster_legacy.c:2330`):slot 所有权仲裁的落地点——configEpoch 大者胜,收到过期配置的一方反向回 UPDATE(行 3151-3175),输家持有脏 slot 时删 key(行 2339-2345),是"最终一致收敛到谁"的最终执行者。
 
 ---
 
-## 写作要点速查表
+## 9. 写作要点速查表
 
-| 内容 | 位置 |
+| 主题 | 位置(仓库相对路径) |
 |---|---|
-| clusterNode 结构（flags/slot位图/fail_reports） | src/cluster_legacy.h:298 |
-| clusterState（epoch/迁移数组/lastVoteEpoch） | src/cluster_legacy.h:341 |
-| clusterLink 总线连接 | src/cluster_legacy.h:44 |
-| 消息类型枚举（PING0/PONG1/MEET2/FAIL3/...） | src/cluster_legacy.h:94 |
-| PFAIL=4 / FAIL=8 标志位与判定宏 | src/cluster_legacy.h:60-61,75-76 |
-| clusterCron 本体（由 100ms cron 驱动，src/server.c:1639-1641） | src/cluster_legacy.c:4674 |
-| 每 1s 随机抽 5 候选 PING pong 最旧者 | src/cluster_legacy.c:4715-4737 |
-| 超时标 PFAIL（node_delay>timeout） | src/cluster_legacy.c:4832-4836 |
-| 每包 gossip 条目数 N/10(min3)+全量PFAIL | src/cluster_legacy.c:3668-3674,3730-3748 |
-| gossip 解码/失败报告/自动加节点 | src/cluster_legacy.c:2097(2141-2147,2199-2221) |
-| FAIL 翻转：quorum=size/2+1 并广播 | src/cluster_legacy.c:1890-1917 |
-| 包类型分发 clusterProcessPacket | src/cluster_legacy.c:2730(2865,3190,3236,3272) |
-| SETSLOT 状态机 MIGRATING/IMPORTING/STABLE/NODE | src/cluster_legacy.c:6078-6206 |
-| 槽归属按 configEpoch 取大重绑 | src/cluster_legacy.c:2330(2379-2401) |
-| 投票闸门 + lastVoteEpoch 一纪元一票 | src/cluster_legacy.c:3998-4099 |
-| 选举 rank 延迟与发起投票 | src/cluster_legacy.c:4245(4317-4345,4381-4392) |
-| CLUSTER FAILOVER FORCE/TAKEOVER | src/cluster_legacy.c:6293-6347 |
-| 集群整体 FAIL 判定（minority 拒写） | src/cluster_legacy.c:5090(5148-5157) |
+| clusterCron 100ms 驱动 | `src/server.c:1639-1640` |
+| clusterCron 定义 | `src/cluster_legacy.c:4674` |
+| 每秒随机抽 5 选 1 发 PING | `src/cluster_legacy.c:4715-4736` |
+| 半超时补发 PING / 断链重连 | `src/cluster_legacy.c:4797-4805 / 4778-4791` |
+| 置 PFAIL(node_delay > timeout) | `src/cluster_legacy.c:4832-4844` |
+| gossip 条目数 N/10 下限 3(概率推导) | `src/cluster_legacy.c:3642-3670` |
+| PFAIL 节点 100% 随包附带 | `src/cluster_legacy.c:3672-3674, 3730-3749` |
+| PFAIL→FAIL 翻转(多数派 + 广播) | `src/cluster_legacy.c:1890-1917` |
+| 失败报告 2×timeout 过期清理 | `src/cluster_legacy.c:1401-1415`(`src/cluster_legacy.h:22-23`) |
+| PFAIL 见 PONG 自愈 / FAIL 撤销 | `src/cluster_legacy.c:3015-3018 / 1922-1952` |
+| FAIL 消息接收即置位 | `src/cluster_legacy.c:3190-3206` |
+| MEET 加节点 / CLUSTER MEET 入口 | `src/cluster_legacy.c:2897-2922 / 5974-6000` |
+| 消息类型常量与包头结构 | `src/cluster_legacy.h:94-105, 230-256` |
+| clusterState(currentEpoch/lastVoteEpoch/迁移数组) | `src/cluster_legacy.h:341-390` |
+| SETSLOT 状态机(MIGRATING/IMPORTING/STABLE/NODE) | `src/cluster_legacy.c:6078-6206` |
+| failover:rank 延迟 + 拉票 + 计票 | `src/cluster_legacy.c:4317-4346, 4380-4413` |
+| 投票五道闸门 / lastVoteEpoch 单票 | `src/cluster_legacy.c:3998-4099` |
+| 全局 FAIL 态(少数派/coverage) | `src/cluster_legacy.c:5090-5157` |
