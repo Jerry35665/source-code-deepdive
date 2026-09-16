@@ -15,8 +15,8 @@
 | 第二系列《FFmpeg 深读》 | 多媒体引擎(avio/编解码/滤镜/网络协议/硬件加速) | [31 篇正文 + 27 份报告](ffmpeg-series/00-导读.md) | commit `9f63b36a` | ✅ 完结(五卷) |
 | 第三系列《Git 深读》 | 版本控制(对象库/引用/pack/传输/合并/工程文化) | [12 篇正文 + 11 份报告](git-series/00-导读.md) | commit `47ce805` | ✅ 完结(两卷) |
 | 第四系列《PostgreSQL 深读》 | 数据库内核(进程/缓冲/WAL/MVCC/执行器/规划器) | [15 篇正文 + 14 份报告](postgresql-series/00-导读.md) | commit `8c7a74c` | ✅ 完结(三卷) |
-| 第五系列《zstd 深读》 | 压缩器(帧格式/FSE/Huffman/策略族/字典) | [7 篇正文 + 6 份报告](zstd-series/00-导读.md) | commit `d79e723` | ✅ 完结 |
-| 第五系列《QuickJS 深读》 | JS 引擎(解析/解释器/GC/正则/内置库) | [7 篇正文 + 6 份报告](quickjs-series/00-导读.md) | commit `04be246` | ✅ 完结 |
+| 第五系列《zstd 深读》 | 压缩器(帧格式/FSE/Huffman/策略族/字典) | [8 篇正文 + 7 份报告](zstd-series/00-导读.md) | commit `d79e723` | ✅ 完结 |
+| 第五系列《QuickJS 深读》 | JS 引擎(解析/解释器/GC/正则/内置库) | [8 篇正文 + 7 份报告](quickjs-series/00-导读.md) | commit `04be246` | ✅ 完结 |
 | 第五系列《curl 深读》 | 传输工具(Multi 状态机/URL/HTTP 栈/TLS) | [5 篇正文 + 4 份报告](curl-series/00-导读.md) | commit `0b04700` | ✅ 完结 |
 | 第五系列《Docker 深读》 | 容器运行时(containerd+runc,两卷) | [13 篇正文 + 12 份报告](docker-series/00-导读.md) | commit `f6132db`/`579be22` | ✅ 完结 |
 | 第五系列《Caddy 深读》 | Web 服务器(模块/自动 HTTPS/反代) | [6 篇正文 + 5 份报告](caddy-series/00-导读.md) | commit `56e3a88` | ✅ 完结 |
