@@ -1,13 +1,13 @@
 # Redis Cluster Gossip 协议与故障检测深读
 
 > 源码版本:redis commit `e8726d1`(e8726d18e5bab24cbfcb0a0c36f21ce5a1140471,2025-09-15)。
-> 本版本已将集群实现拆分:`src/cluster.c` 是对外 API 壳(1728 行),gossip 协议核心全部在 `src/cluster_legacy.c`(约 6600 行);结构体与协议常量在 `src/cluster_legacy.h`。文中行号均以仓库相对路径标注,已逐一 grep/Read 核对。
+> 本版本已将集群实现拆分:`src/cluster.c` 是对外 API 壳(1728 行),gossip 协议核心全部在 `src/cluster_legacy.c`(6518 行);结构体与协议常量在 `src/cluster_legacy.h`。文中行号均以仓库相对路径标注,已逐一 grep/Read 核对。
 
 ---
 
 ## 1. 全景:一次节点宕机如何在 gossip 网络中翻转成 FAIL
 
-Redis Cluster 的集群总线(cluster bus,端口 = 客户端端口 + 10000,`src/cluster_legacy.h:18`)上所有节点两两之间跑同一套 gossip 消息。PING/PONG/MEET 三种消息**是同一种包**(仅 type 字段不同,`src/cluster_legacy.h:88-101` 的注释明说了这一点),包头携带自己的 slots 位图、currentEpoch、configEpoch,包体携带最多 N/10 条关于**其他节点**的 gossip 条目。
+Redis Cluster 的集群总线(cluster bus,端口 = 客户端端口 + 10000,`src/cluster_legacy.h:18`)上所有节点两两之间跑同一套 gossip 消息。PING/PONG/MEET 三种消息**是同一种包**(仅 type 字段不同,`src/cluster_legacy.h:88-93` 的注释明说了这一点,消息常量见 94-105),包头携带自己的 slots 位图、currentEpoch、configEpoch,包体携带最多 N/10 条关于**其他节点**的 gossip 条目。
 
 ```
  节点M1 宕机(cluster_node_timeout 超时)
@@ -194,10 +194,11 @@ void markNodeAsFailingIfNeeded(clusterNode *node) {          /* 1890 */
 
 几个深藏的实现细节:
 
-- **手动迁移绕过选举**:`SETSLOT n NODE` 把 slot 划给自己时,若正处 IMPORTING 状态,调用 `clusterBumpConfigEpochWithoutConsensus()` 单方面抬升 configEpoch(行 6180-6194),随后 `clusterBroadcastPong(CLUSTER_BROADCAST_ALL)` 立刻全网广播(行 6198)。注释明说:若与别的节点的 epoch 撞车,由 `clusterHandleConfigEpochCollision()` 事后仲裁(该函数在 `src/cluster_legacy.c:3179-3183` 被调用)。
+- **ADDSLOTS/DELSLOTS 是"一步到位"的所有权变更,不走迁移状态机**:`CLUSTER ADDSLOTS/DELSLOTS` 入口在 `src/cluster_legacy.c:6011-6038`(区间版 ADDSLOTSRANGE/DELSLOTSRANGE 在 6039-6077),统一落到 `clusterUpdateSlots()`(`src/cluster_legacy.c:5630-5646`)——DEL 调 `clusterDelSlot`,ADD 调 `clusterAddSlot`。而 `clusterAddSlot` 只接受**当前无主**的 slot(`src/cluster_legacy.c:5011` 的 `if (server.cluster->slots[slot]) return C_ERR;`),即 ADDSLOTS 只能给**自己**认领空槽(命令里 slots 数组就是按"assigned to myself"语义构造的)。所以建集群/扩容先 ADDSLOTS 认领,而搬家必须走 SETSLOT 四步状态机;若该槽曾处 IMPORTING 状态,ADDSLOTS 会顺手清除它(行 5638-5639)。
+- **手动迁移绕过选举**:`SETSLOT n NODE` 把 slot 划给自己时,若正处 IMPORTING 状态,调用 `clusterBumpConfigEpochWithoutConsensus()` 单方面抬升 configEpoch(行 6180-6194,函数定义 `src/cluster_legacy.c:1709-1726`),随后 `clusterBroadcastPong(CLUSTER_BROADCAST_ALL)` 立刻全网广播(行 6198)。注释明说:若与别的节点的 epoch 撞车,由 `clusterHandleConfigEpochCollision()` 事后仲裁(该函数在 `src/cluster_legacy.c:3179-3183` 被调用)。
 - **腾空主自动降级为从**:划走自己最后一个 slot 且开启 replica-migration 时,`clusterSetMaster(n)` 把自己变成新主的从节点(行 6163-6176)。
 - **收尾兜底**:nodes.conf 持久化在行 6205 `clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG|...)`。
-- 迁移期间的客户端语义由 `getMigratingSlotDest/getImportingSlotSource`(`src/cluster.h:138-139`)接入 ASK/MOVED 重定向(重定向错误码定义 `src/cluster.h:30-37`)。
+- **迁移期的客户端语义**:源节点 MIGRATING 状态下 key 缺失则回 `-ASK` 指向目标(`src/cluster.c:1281-1289`);目标 IMPORTING 状态只对带 `ASKING` 标志的请求放行(`src/cluster.c:1296-1305`);迁移中途既有 key 又缺 key 回 `-TRYAGAIN`(行 1283-1285)。状态查询经 `getMigratingSlotDest/getImportingSlotSource`(`src/cluster.h:138-139`)接入重定向判定(错误码定义 `src/cluster.h:30-37`)。
 
 ---
 
@@ -241,7 +242,7 @@ rank 由 `clusterGetSlaveRank()`(`src/cluster_legacy.c:4113-4129`)计算:复制�
 
 ### 5.3 手动 failover 快路径
 
-`CLUSTER FAILOVER` 走 MFSTART 消息(`src/cluster_legacy.c:3252-3271`):主收到后暂停客户端写(pause 时长 = `CLUSTER_MF_TIMEOUT × CLUSTER_MF_PAUSE_MULT`,`src/cluster_legacy.h:24-25`),把自己的复制偏移经 PONG 带回从节点(行 2850-2862 填 `mf_master_offset`);从节点追平 offset 后 `mf_can_start` 置位(行 4541-4589 注释所述流程),**零延迟**发起选举,且投票方收到 FORCEACK 后即使主还活着也放行(行 4003、4037-4038)。这是"数据不丢换主"的受控通道。
+`CLUSTER FAILOVER` 命令入口在 `src/cluster_legacy.c:6293-6346`(发给从节点执行;FORCE 只置 `mf_can_start=1` 跳过 offset 协商,行 6337-6342;TAKEOVER 更激进,直接 `clusterBumpConfigEpochWithoutConsensus()` + `clusterFailoverReplaceYourMaster()`,行 6329-6336,连多数派投票都省了,是唯一的"无共识夺权"通道)。常规路径走 MFSTART 消息(`src/cluster_legacy.c:3252-3271`):主收到后暂停客户端写(pause 时长 = `CLUSTER_MF_TIMEOUT × CLUSTER_MF_PAUSE_MULT`,`src/cluster_legacy.h:24-25`),把自己的复制偏移经 PONG 带回从节点(行 2850-2862 填 `mf_master_offset`);从节点在 `clusterHandleManualFailover()`(`src/cluster_legacy.c:4584-4605`)中追平 offset 后置 `mf_can_start=1`(行 4597),**零延迟**发起选举,且投票方收到 FORCEACK 后即使主还活着也放行(行 4003、4037-4038)。这是"数据不丢换主"的受控通道。
 
 ---
 
@@ -281,7 +282,7 @@ Redis 选举与 Raft 的同构点很直白:`currentEpoch`≈term、`lastVoteEpoc
 2. **cluster-node-timeout 调小会怎样?** 检测更快,但 PING 间隔(默认 timeout/2,行 4797-4798)、失败报告有效期(2×timeout)、投票节流(2×timeout,行 4059)、FAIL 撤销冷却全部随之缩短,误判与振荡风险上升。
 3. **为什么每包只 gossip N/10 个节点,下限 3?** 源码推导(行 3642-3667):保证 PFAIL 节点在 2×timeout 有效期内被提及次数期望 ≈ 80%N,必然过多数;下限 3 保证小集群也有基本冗余。
 4. **gossip 会不会把别家集群的节点拉进来?** 不会。gossip 段只接受**已认识节点**发来的未知节点信息(`src/cluster_legacy.c:2209-2211`),且 node ID 是随机 40 字节;被移除的节点 ID 进黑名单 60 秒(行 1813)。MEET 是唯一强制加节点的入口(行 2897-2916)。
-5. **MEET 和 PING 到底差在哪?** 同一种包不同 type。接收方对未知发送者:收到 PING 不会加节点(防误入),收到 MEET 强制创建 HANDSHAKE 节点(行 2897-2916)。MEET 标志在首包发出后即清除(行 3394-3400 附近,`clusterSendPing(link, node->flags & CLUSTER_NODE_MEET ? MEET : PING)` 在行 3386-3388)。
+5. **MEET 和 PING 到底差在哪?** 同一种包不同 type。发起方:`CLUSTER MEET` 命令(`src/cluster_legacy.c:5974-6001`)只是创建一个带 `HANDSHAKE|MEET` 标志的占位节点(`clusterStartHandshake`,`src/cluster_legacy.c:1981-2036`,标志打在行 2026);cron 重连成功时把首包发成 MEET(行 3386-3388)并随即清掉 MEET 标志(行 3400)。接收方对未知发送者:收到 PING 不会加节点(防误入别的集群),收到 MEET 强制创建 HANDSHAKE 节点(行 2897-2916),首个 PONG 到达后用真实 node ID 转正(行 2956-2961)。
 6. **一个主节点能投两票吗?** 不能。`lastVoteEpoch == currentEpoch` 直接拒绝(行 4026-4032),且 lastVoteEpoch 持久化(行 4093 + `src/cluster_legacy.h:372`),重启也不重投。
 7. **多个从节点同时选举怎么办?** rank 延迟错峰:500ms 随机 + rank×1000ms(行 4318-4328),复制偏移最新的先选;同一主的两票间隔 2×timeout(行 4059)进一步保证一个 epoch 内基本只有一人获票。
 8. **主从分区时集群还写吗?** 可达主节点数低于多数派(`reachable_masters < size/2+1`,`src/cluster_legacy.c:5150-5157`)或开了 require-full-coverage 且 slots 有洞(行 5114-5123)时,全局转 CLUSTER_FAIL,拒绝写入(-CLUSTERDOWN)。少数派分区自动只读。
@@ -294,7 +295,7 @@ Redis 选举与 Raft 的同构点很直白:`currentEpoch`≈term、`lastVoteEpoc
 2. **`clusterHandleConfigEpochCollision`**:手动迁移撞 epoch 的事后仲裁(`src/cluster_legacy.c:3179-3183` 调用点),研究"无共识 epoch 提升"如何自愈,是理解 Redis 弱共识边界的好切口。
 3. **`owner_not_claiming_slot` 位图**(`src/cluster_legacy.h:382-387`):迁移中 owner 停止声称 slot 后,防止其他节点用 UPDATE 消息把错误归属"纠正"回去——slot 迁移与 gossip 冲突的微妙边界。
 4. **FAIL 消息的权限模型**:任何已知节点(含从节点)发来的 FAIL 都被接受(行 3193-3206),而 PFAIL 报告只认主节点(行 2140)——因为 FAIL 本身是别人多数派确认的结果,从节点只是中继;UPDATE 消息同理(行 3272-3293)。
-5. **`clusterUpdateSlotsConfigWith`**(`src/cluster_legacy.c:2330`):slot 所有权仲裁的落地点——configEpoch 大者胜,收到过期配置的一方反向回 UPDATE(行 3151-3175),输家持有脏 slot 时删 key(行 2339-2345),是"最终一致收敛到谁"的最终执行者。
+5. **`clusterUpdateSlotsConfigWith`**(`src/cluster_legacy.c:2330`):slot 所有权仲裁的落地点——configEpoch 大者胜(行 2379-2380),收到过期配置的一方反向回 UPDATE(行 3151-3175),输家持有脏 slot 时删 key(判断在行 2384-2390,删除落在行 2462-2463),是"最终一致收敛到谁"的最终执行者。
 
 ---
 
@@ -317,6 +318,12 @@ Redis 选举与 Raft 的同构点很直白:`currentEpoch`≈term、`lastVoteEpoc
 | 消息类型常量与包头结构 | `src/cluster_legacy.h:94-105, 230-256` |
 | clusterState(currentEpoch/lastVoteEpoch/迁移数组) | `src/cluster_legacy.h:341-390` |
 | SETSLOT 状态机(MIGRATING/IMPORTING/STABLE/NODE) | `src/cluster_legacy.c:6078-6206` |
+| ADDSLOTS/DELSLOTS → clusterUpdateSlots(空槽约束) | `src/cluster_legacy.c:6011-6077, 5630-5646, 5010-5018` |
+| 迁移期 ASK/ASKING/TRYAGAIN 重定向 | `src/cluster.c:1281-1305` |
+| CLUSTER MEET → clusterStartHandshake(HANDSHAKE\|MEET) | `src/cluster_legacy.c:5974-6001, 1981-2036` |
+| CLUSTER FAILOVER 命令入口(FORCE/TAKEOVER) | `src/cluster_legacy.c:6293-6346` |
+| 手动 failover 状态机(MFSTART→offset→can_start) | `src/cluster_legacy.c:3252-3271, 2850-2862, 4584-4605` |
+| slots 仲裁与反向 UPDATE 纠错 | `src/cluster_legacy.c:3130-3131, 3151-3175, 2330-2465` |
 | failover:rank 延迟 + 拉票 + 计票 | `src/cluster_legacy.c:4317-4346, 4380-4413` |
 | 投票五道闸门 / lastVoteEpoch 单票 | `src/cluster_legacy.c:3998-4099` |
 | 全局 FAIL 态(少数派/coverage) | `src/cluster_legacy.c:5090-5157` |
