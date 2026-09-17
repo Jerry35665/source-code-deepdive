@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "mimosa-hook-status/v1",
+  "recordedAt": "2026-09-17T18:18:36.126Z",
+  "sessionId": "sess_18756338-4aca-4c58-a88b-7e772d1497af",
+  "event": "PostToolUse",
+  "toolName": "Edit",
+  "file": "C:\\Users\\Jerry\\.zcode\\workspace\\default\\source-code-deepdive\\cross-series\\01-总目录.md",
+  "outcome": "clear",
+  "coverage": "complete",
+  "findingCount": 0,
+  "durationMs": 5,
+  "hostState": "hook_complete",
+  "reportHint": ".mimosa/reports/"
+}
