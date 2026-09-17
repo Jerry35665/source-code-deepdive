@@ -285,3 +285,50 @@
 产出 duckdb-series 7 篇正文+6 报告(commit 8d841f0,基线 duckdb/duckdb 7e886f44)。
 源码获取记录:SSH 直连克隆 ~1MB/min 放弃;codeload https SSL 失败;gh-proxy tarball 截断;gitclone.com 504;**gitcode gh_mirrors 按 SHA 浅 fetch 成功(~1.4MB/s)**。
 附带:README 补 MinIO 条目+全库计数修正(232 篇正文+190 报告);总目录收录 DuckDB。
+
+### 夜间加场·批二:Envoy 卷一(2026-09-18 凌晨)
+
+| Agent | tokens |
+|---|---|
+| A 全景架构 | 3,701,766 |
+| B 配置与 xDS | 4,739,063 |
+| C 网络与监听 | 6,519,465 |
+| D HTTP 与路由 | 3,700,896 |
+| E 集群与负载均衡 | 6,442,279 |
+| F 热重启与工程 | 2,704,063 |
+
+**小计(精确):27,807,532**;主会话(读 6 报告+写 7 篇正文+镜像取源码/扫描/推送)估算 ~400,000 (est)。
+产出 envoy-series 7 篇正文+6 报告(基线 envoyproxy/envoy tag v1.39.1,commit b579d07d)。
+源码获取:gitcode gh_mirrors/envoy/envoy 是 **Laravel Envoy 同名仓库**(已甄别弃用);真身 gh_mirrors/en/envoy,fetch tag v1.39.1 成功。
+推送:Mimosa push hook 以 repos/v8 上游测试文件(525 条,gitignored 不在推送载荷)强制拦截全部 push;按 hook 指示启动 normal 密封扫描(scan-job-mu5uu1kg)解锁中,推送延后重试。
+
+### 夜间加场·批三:NATS 卷一(2026-09-18 凌晨)
+
+| Agent | tokens |
+|---|---|
+| A 全景架构 | 2,889,168 |
+| B 协议与解析 | 2,739,757 |
+| C 订阅匹配 | 1,174,344 |
+| D 集群与网关 | 8,789,337 |
+| E JetStream | 6,687,975 |
+| F 安全与工程 | 3,421,932 |
+
+**小计(精确):25,702,513**;主会话估算 ~400,000 (est)。
+产出 nats-series 7 篇正文+6 报告(基线 nats-server 8f3f31b0,gitcode 镜像 HEAD 2026-09-17)。
+推送门禁:密封扫描完成(coverage complete)后 hook 仍以冻结的陈旧结果拦截(525 条/repos/v8),需插件重启清除;三个提交(90e4a51/3f28689/0980e35)滞留本地待推送。
+
+### 夜间加场·批四:systemd 卷一(2026-09-18 凌晨)
+
+| Agent | tokens |
+|---|---|
+| A 全景架构 | 3,536,981 |
+| B unit 与 job | 3,990,553 |
+| C 事件驱动底座 | 5,011,674 |
+| D 服务进程管理 | 4,825,345 |
+| E cgroup 集成 | 2,934,648 |
+| F 激活器与工程 | 4,318,187 |
+
+**小计(精确):24,617,388**;主会话估算 ~400,000 (est)。
+产出 systemd-series 7 篇正文+6 报告(基线 systemd 1f66b524,gitcode 镜像 HEAD;**Windows 检出须 core.protectNTFS=false + sparse-checkout src**——上游测试夹具文件名含冒号)。
+推送:Mimosa 门禁于批四提交时自行恢复放行,四笔滞留(90e4a51/3f28689/0980e35/1b995e4)一次性推送并 ls-remote 验证一致。
+本夜总产出:DuckDB/Envoy/NATS/systemd 四个新系列卷一(28 篇正文+24 报告),子代理合计约 102.99M tokens。
