@@ -269,3 +269,19 @@
 | D TLS 与连接管理(重试) | 3,557,770 |
 
 **小计(精确):12,182,758**;产出 curl-series 5 篇正文+4 报告(commit 9622f41)。失败记录:首轮 C/D 双双"Subagent was inactive 600000ms"(服务端停摆,整夜无自动重试——单会话模式单点故障教训);README 回灌事故:批次③ cp 发布目录旧版覆盖工作区(bc1fa71),09-14 修复(e447329)并同步发布目录。
+
+### 夜间加场:DuckDB 卷一(2026-09-17 夜)
+
+| Agent | tokens |
+|---|---|
+| A 全景架构 | 4,687,359 |
+| B 类型系统与向量化 | 2,807,777 |
+| C 解析与绑定 | 3,565,024 |
+| D 优化器 | 4,300,444 |
+| E 执行器与并行 | 5,571,808 |
+| F 事务与 MVCC | 3,960,073 |
+
+**小计(精确):24,892,485**;主会话(读 6 报告+写 7 篇正文+源码获取/扫描/推送)估算 ~400,000 (est)。
+产出 duckdb-series 7 篇正文+6 报告(commit 8d841f0,基线 duckdb/duckdb 7e886f44)。
+源码获取记录:SSH 直连克隆 ~1MB/min 放弃;codeload https SSL 失败;gh-proxy tarball 截断;gitclone.com 504;**gitcode gh_mirrors 按 SHA 浅 fetch 成功(~1.4MB/s)**。
+附带:README 补 MinIO 条目+全库计数修正(232 篇正文+190 报告);总目录收录 DuckDB。
