@@ -5,7 +5,7 @@
 # 源码深读 · 系统开源项目解读系列
 
 > 用 AI 逐行阅读顶级开源项目源码,产出"可对照源码验证"的中文解读卷本。所有行号引用基于明确 pin 的 commit,所有结论可复算、可证伪。
-> **当前进度:五个系列全部完结——18 个系列目录,160 篇正文 + 138 份调研报告,另有横向对照 2 篇。**
+> **当前进度:六个系列全部完结——20 个系列目录,232 篇正文 + 190 份调研报告,另有横向对照 2 篇。**
 
 ## 一、系列总览
 
@@ -22,8 +22,10 @@
 | 第五系列《Caddy 深读》 | Web 服务器(模块/自动 HTTPS/反代) | [6 篇正文 + 5 份报告](caddy-series/00-导读.md) | commit `56e3a88` | ✅ 完结 |
 | 第五系列《V8 深读》 | JS 引擎执行管线精简卷(堆/解析/解释/对象/GC) | [6 篇正文 + 5 份报告](v8-series/00-导读.md) | commit `c6a1f7c2` | ✅ 完结 |
 | 第五系列《Prometheus 深读》 | 监控 TSDB(Head/XOR/WAL/compaction/PromQL) | [7 篇正文 + 6 份报告](prometheus-series/00-导读.md) | commit `b0f312b` | ✅ 完结 |
+| 第五系列《MinIO 深读》 | S3 对象存储(纠删码/版本化/healing/IAM/SSE) | [11 篇正文 + 10 份报告](minio-series/00-导读.md) | commit `7aac2a2` | ✅ 完结(两卷) |
+| 第五系列《DuckDB 深读》 | 嵌入式 OLAP(PEG 解析/向量化/优化器/并行/MVCC) | [7 篇正文 + 6 份报告](duckdb-series/00-导读.md) | commit `7e886f44` | 🚧 卷一完结 |
 | 横向对照 | 十七项目十大横贯模式 + [总目录](cross-series/01-总目录.md) | [2 篇](cross-series/00-横向对照总览.md) | — | ✅ 持续更新 |
-| 后续系列 | 候选:Docker 卷二(网络/CNI)/Wireshark/扩展卷 | — | — | 📋 待启动 |
+| 后续系列 | DuckDB 卷二(存储/Parquet/checkpoint)/Wireshark/扩展卷 | — | — | 📋 待启动 |
 
 ### 第一系列各卷(65 篇)
 
@@ -96,4 +98,6 @@ source-code-deepdive/
 - 2026-09-11 ~ 13:第二系列《FFmpeg 深读》五卷(31 篇)、第三系列《Git 深读》两卷(12 篇)、横向对照特刊、第四系列《PostgreSQL 深读》三卷(15 篇)连续交付;
 - 2026-09-13 ~ 15:第五系列六卷连续交付——zstd(7 篇)、QuickJS(7 篇)、curl(5 篇)、Docker 两卷(13 篇)、Caddy(6 篇)、V8 精简卷(6 篇);总目录收录全部系列;
 - 2026-09-15 凌晨:《Prometheus 深读》卷一(7 篇)夜间批次交付;总目录收录 Prometheus;
-- 下一批:Prometheus 卷二(远程存储/服务发现细节/Rule 引擎)/Docker 卷二(网络/CNI)/Wireshark(仓库方案)。
+- 2026-09-15 ~ 17 夜间队列:《MinIO 深读》两卷(11 篇+10 报告)、Docker 卷三/卷四(6 篇)、V8 卷二/卷三(6 篇)、PG 卷四/卷五(6 篇)、curl/Redis/zstd/QuickJS/Git 扩展章(11 篇)连续交付;
+- 2026-09-17 夜:《DuckDB 深读》卷一(7 篇正文+6 报告,基线 7e886f44)交付;README 补齐 MinIO 条目;
+- 下一批:DuckDB 卷二(存储引擎/Parquet/checkpoint)/Wireshark(镜像方案)/扩展卷。
