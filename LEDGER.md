@@ -332,3 +332,20 @@
 产出 systemd-series 7 篇正文+6 报告(基线 systemd 1f66b524,gitcode 镜像 HEAD;**Windows 检出须 core.protectNTFS=false + sparse-checkout src**——上游测试夹具文件名含冒号)。
 推送:Mimosa 门禁于批四提交时自行恢复放行,四笔滞留(90e4a51/3f28689/0980e35/1b995e4)一次性推送并 ls-remote 验证一致。
 本夜总产出:DuckDB/Envoy/NATS/systemd 四个新系列卷一(28 篇正文+24 报告),子代理合计约 102.99M tokens。
+
+### 夜 09-18 周五晚:五批次(2026-09-18 23:08 ~ 09-19 早晨)
+
+**批一 DuckDB 卷二(存储)**:A 存储总览 3,879,520 / B BufferManager 3,075,760 / C 表存储 4,310,752 / D WAL 与 checkpoint 6,819,290 / E 压缩 4,580,119 / F Parquet 5,708,950 → **小计 28,374,391**;commit 30c300f。
+
+**批二 systemd 卷二(周边守护进程)**:A journald 4,301,177 / B udev 6,903,003 / C sd-journal 3,440,767 / D logind 8,397,827 / E networkd-resolved 5,585,466 / F 工程文化 4,340,487 → **小计 32,968,727**;commit 69eae06。
+
+**批三 Envoy 卷二**:A QUIC 3,407,749 / B Wasm 与 Lua 4,565,592 / C 可观测性 8,746,921 / D TLS 与 SDS 2,536,810 / E 上游连接细节 5,406,392 / F 管理面与生态 5,865,260 → **小计 30,528,724**;commit 25fd46c。
+
+**批四 NATS 卷二**:A leafnode 3,075,648 / B MQTT 与 WS 3,941,855 / C 系统服务与账号 6,120,388 / D 可观测性 3,509,864 / E KV 与对象存储 2,350,376 / F 性能工程 2,822,996 → **小计 21,821,127**;commit b7d2f80。
+
+**批五 OpenCV 卷一(新系列)**:A 全景与 Mat 2,005,287 / B UMat 与 T-API 2,346,726 / C imgproc 5,904,807 / D IO 与视频 1,490,830 / E DNN 4,558,381 / F HAL 与工程 2,502,523 → **小计 18,808,554**;commit c3b99f9。
+
+**本夜子代理合计:约 154.5M tokens**;主会话(读 30 份报告+写 40 篇正文+镜像取源码+扫描+推送)估算 ~700,000 (est)。
+产出:四个卷二(DuckDB/systemd/Envoy/NATS 各 6 篇正文+6 报告)+ OpenCV 新系列卷一(7 篇正文+6 报告),共 31 篇正文 + 30 份报告。
+源码获取:systemd 用 gitcode gh_mirrors/sy(sparse src,Windows 需 core.protectNTFS=false——上游测试夹具文件名含冒号);OpenCV 用 gitee.com/mirrors(HEAD d3d247f1,2025-11-05 同步,基线较旧已如实标注)。
+终态:远程=本地=最终 commit;全库 24 个系列目录,260 篇正文 + 214 份调研报告。
