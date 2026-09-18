@@ -6,7 +6,7 @@
 
 > 用 AI 逐行阅读顶级开源项目源码,产出"可对照源码验证"的中文解读卷本。所有行号引用基于明确 pin 的 commit,所有结论可复算、可证伪。
 > **当前进度:六个系列全部完结——23 个系列目录,253 篇正文 + 208 份调研报告,另有横向对照 2 篇。**
-> 09-19 起新增:DuckDB 卷二 6 篇正文 + 6 份报告(存储引擎)。
+> 09-19 起新增:DuckDB 卷二 6 篇(存储)与 systemd 卷二 6 篇(journald/udev/logind 等)。
 
 ## 一、系列总览
 
@@ -27,7 +27,7 @@
 | 第五系列《DuckDB 深读》 | 嵌入式 OLAP(PEG 解析/向量化/优化器/并行/MVCC/存储) | [13 篇正文 + 12 份报告](duckdb-series/00-导读.md) | commit `7e886f44` | 🚧 两卷 |
 | 第五系列《Envoy 深读》 | 服务网格数据面(xDS/监听/HTTP 路由/LB/热重启) | [7 篇正文 + 6 份报告](envoy-series/00-导读.md) | tag `v1.39.1` | 🚧 卷一完结 |
 | 第五系列《NATS 深读》 | 消息总线(文本协议/订阅匹配/集群网关/JetStream) | [7 篇正文 + 6 份报告](nats-series/00-导读.md) | commit `8f3f31b0` | 🚧 卷一完结 |
-| 第五系列《systemd 深读》 | PID 1(unit/job 事务/sd-event/cgroup/激活器) | [7 篇正文 + 6 份报告](systemd-series/00-导读.md) | commit `1f66b524` | 🚧 卷一完结 |
+| 第五系列《systemd 深读》 | PID 1 与周边(unit/job 事务/sd-event/cgroup/journald/udev/logind) | [13 篇正文 + 12 份报告](systemd-series/00-导读.md) | commit `1f66b524` | 🚧 两卷 |
 | 横向对照 | 十七项目十大横贯模式 + [总目录](cross-series/01-总目录.md) | [2 篇](cross-series/00-横向对照总览.md) | — | ✅ 持续更新 |
 | 后续系列 | DuckDB 卷二(存储/Parquet/checkpoint)/Wireshark/扩展卷 | — | — | 📋 待启动 |
 
