@@ -5,7 +5,7 @@
 # 源码深读 · 系统开源项目解读系列
 
 > 用 AI 逐行阅读顶级开源项目源码,产出"可对照源码验证"的中文解读卷本。所有行号引用基于明确 pin 的 commit,所有结论可复算、可证伪。
-> **当前进度:27 个系列目录,301 篇正文 + 278 份调研报告,另有横向对照 2 篇(09-20 凌晨精确清点)。**
+> **当前进度:27 个系列目录,303 篇正文 + 280 份调研报告,另有横向对照 2 篇(09-20 凌晨精确清点)。**
 > 09-19 夜新增 BoltDB/Wireshark 两个新系列卷一 + OpenCV 卷二 + DuckDB 卷三/卷四 + systemd 卷三/卷四。
 
 ## 一、系列总览
@@ -29,7 +29,7 @@
 | 第五系列《Wireshark 深读》 | 抓包与解析(全景/dumpcap/协议树/解码器分发/dfilter/wiretap) | [6 篇正文 + 6 份报告](wireshark-series/00-导读.md) | tag `v4.7.3` | ✅ 卷一 |
 | 第五系列《Envoy 深读》 | 服务网格数据面(xDS/监听/HTTP 路由/LB/热重启/QUIC/沙箱) | [13 篇正文 + 12 份报告](envoy-series/00-导读.md) | tag `v1.39.1` | 🚧 两卷 |
 | 第五系列《NATS 深读》 | 消息总线(文本协议/订阅匹配/集群网关/JetStream/leafnode/MQTT) | [13 篇正文 + 12 份报告](nats-series/00-导读.md) | commit `8f3f31b0` | 🚧 两卷 |
-| 第五系列《OpenCV 深读》 | 视觉库(cv::Mat/UMat/imgproc/IO/dnn/HAL/features2d/calib3d/video/gapi) | [12 篇正文 + 12 份报告](opencv-series/00-导读.md) | commit `d3d247f1` | ✅ 两卷 |
+| 第五系列《OpenCV 深读》 | 视觉库(cv::Mat/UMat/imgproc/IO/dnn/HAL/features2d/calib3d/video/gapi/ml/flann) | [14 篇正文 + 14 份报告](opencv-series/00-导读.md) | commit `d3d247f1` | 🚧 三卷(2/6) |
 | 第五系列《systemd 深读》 | PID 1 与周边(unit/job/sd-event/cgroup/journald/udev/logind/nspawn/homed/TPM2/creds/sysupdate/可信启动链/analyze) | [24 篇正文 + 24 份报告](systemd-series/00-导读.md) | commit `1f66b524` | ✅ 四卷 |
 | 横向对照 | 十七项目十大横贯模式 + [总目录](cross-series/01-总目录.md) | [2 篇](cross-series/00-横向对照总览.md) | — | ✅ 持续更新 |
 | 后续系列 | DuckDB 卷二(存储/Parquet/checkpoint)/Wireshark/扩展卷 | — | — | 📋 待启动 |
@@ -113,4 +113,5 @@ source-code-deepdive/
 - 2026-09-17 夜:《DuckDB 深读》卷一(7 篇正文+6 报告,基线 7e886f44)交付;README 补齐 MinIO 条目;
 - 2026-09-19 ~ 09-20 凌晨:五批次连续交付——BoltDB 卷一(新系列,fd01fc79)、Wireshark 卷一(新系列,v4.7.3,gitcode gh_mirrors/wi 镜像一次成功)、OpenCV 卷二(features2d/calib3d/video/gapi/objdetect/photo+stitching)、DuckDB 卷三(ART/表达式执行/Join/CSV 与工程/Profiler/扩展体系)、systemd 卷三(nspawn/homed/加密与 TPM2/importd+portabled/sysupdate/creds);共 30 篇正文 + 30 份报告,子代理约 1.48 亿 tokens。
 - 09-20 凌晨加批:systemd 卷四(bootctl/ukify+stub/measure+pcrlock/sysext/kernel-install/analyze)✅ c4bf067;DuckDB 卷四(窗口函数/排序与 TopN/统计与剪枝/聚合引擎,4 篇)✅ de90766+9b6c9cd。
-- 下一批候选:OpenCV 卷三、DuckDB 卷五(排序外排/AggrState 生命周期/机密计算)、systemd 卷五(ukify 深挖/网络信任链)、新系列候选(haproxy/kubevirt)。
+- 09-20 凌晨加批八:OpenCV 卷三首二篇(ml/flann+videoio,进行中 2/6)✅ d5d6573+3ed518e。
+- 下一批候选:OpenCV 卷三续(imgcodecs/highgui/persistence)、DuckDB 卷五(排序外排/AggrState 生命周期/机密计算)、systemd 卷五(ukify 深挖/网络信任链)、新系列候选(haproxy/kubevirt)。
