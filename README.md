@@ -5,8 +5,8 @@
 # 源码深读 · 系统开源项目解读系列
 
 > 用 AI 逐行阅读顶级开源项目源码,产出"可对照源码验证"的中文解读卷本。所有行号引用基于明确 pin 的 commit,所有结论可复算、可证伪。
-> **当前进度:六个系列全部完结——23 个系列目录,253 篇正文 + 208 份调研报告,另有横向对照 2 篇。**
-> 09-19 起新增四卷二(DuckDB/systemd/Envoy/NATS)+新系列 OpenCV 卷一。
+> **当前进度:27 个系列目录,291 篇正文 + 268 份调研报告,另有横向对照 2 篇(09-20 凌晨精确清点)。**
+> 09-19 夜新增 BoltDB/Wireshark 两个新系列卷一 + OpenCV 卷二 + DuckDB/systemd 卷三。
 
 ## 一、系列总览
 
@@ -24,11 +24,13 @@
 | 第五系列《V8 深读》 | JS 引擎执行管线精简卷(堆/解析/解释/对象/GC) | [6 篇正文 + 5 份报告](v8-series/00-导读.md) | commit `c6a1f7c2` | ✅ 完结 |
 | 第五系列《Prometheus 深读》 | 监控 TSDB(Head/XOR/WAL/compaction/PromQL) | [7 篇正文 + 6 份报告](prometheus-series/00-导读.md) | commit `b0f312b` | ✅ 完结 |
 | 第五系列《MinIO 深读》 | S3 对象存储(纠删码/版本化/healing/IAM/SSE) | [11 篇正文 + 10 份报告](minio-series/00-导读.md) | commit `7aac2a2` | ✅ 完结(两卷) |
-| 第五系列《DuckDB 深读》 | 嵌入式 OLAP(PEG 解析/向量化/优化器/并行/MVCC/存储) | [13 篇正文 + 12 份报告](duckdb-series/00-导读.md) | commit `7e886f44` | 🚧 两卷 |
+| 第五系列《DuckDB 深读》 | 嵌入式 OLAP(PEG 解析/向量化/优化器/并行/MVCC/存储/ART/Join/CSV/扩展) | [18 篇正文 + 18 份报告](duckdb-series/00-导读.md) | commit `7e886f44` | ✅ 三卷 |
+| 第五系列《BoltDB 深读》 | 嵌入式 KV(全景/页面布局/B+tree 游标/事务提交/mmap 并发/工程) | [6 篇正文 + 6 份报告](boltdb-series/00-导读.md) | commit `fd01fc79` | ✅ 卷一 |
+| 第五系列《Wireshark 深读》 | 抓包与解析(全景/dumpcap/协议树/解码器分发/dfilter/wiretap) | [6 篇正文 + 6 份报告](wireshark-series/00-导读.md) | tag `v4.7.3` | ✅ 卷一 |
 | 第五系列《Envoy 深读》 | 服务网格数据面(xDS/监听/HTTP 路由/LB/热重启/QUIC/沙箱) | [13 篇正文 + 12 份报告](envoy-series/00-导读.md) | tag `v1.39.1` | 🚧 两卷 |
 | 第五系列《NATS 深读》 | 消息总线(文本协议/订阅匹配/集群网关/JetStream/leafnode/MQTT) | [13 篇正文 + 12 份报告](nats-series/00-导读.md) | commit `8f3f31b0` | 🚧 两卷 |
-| 第五系列《OpenCV 深读》 | 视觉库(cv::Mat/UMat/imgproc/IO/dnn/HAL/并行) | [7 篇正文 + 6 份报告](opencv-series/00-导读.md) | commit `d3d247f1` | 🚧 卷一完结 |
-| 第五系列《systemd 深读》 | PID 1 与周边(unit/job 事务/sd-event/cgroup/journald/udev/logind) | [13 篇正文 + 12 份报告](systemd-series/00-导读.md) | commit `1f66b524` | 🚧 两卷 |
+| 第五系列《OpenCV 深读》 | 视觉库(cv::Mat/UMat/imgproc/IO/dnn/HAL/features2d/calib3d/video/gapi) | [12 篇正文 + 12 份报告](opencv-series/00-导读.md) | commit `d3d247f1` | ✅ 两卷 |
+| 第五系列《systemd 深读》 | PID 1 与周边(unit/job/sd-event/cgroup/journald/udev/logind/nspawn/homed/TPM2/sysupdate) | [18 篇正文 + 18 份报告](systemd-series/00-导读.md) | commit `1f66b524` | ✅ 三卷 |
 | 横向对照 | 十七项目十大横贯模式 + [总目录](cross-series/01-总目录.md) | [2 篇](cross-series/00-横向对照总览.md) | — | ✅ 持续更新 |
 | 后续系列 | DuckDB 卷二(存储/Parquet/checkpoint)/Wireshark/扩展卷 | — | — | 📋 待启动 |
 
@@ -74,7 +76,11 @@ source-code-deepdive/
 ├── docker-series/       第五系列四(容器两卷,00-06 卷一 + 07-12 卷二)
 ├── caddy-series/        第五系列五(Web 服务器,00-05)
 ├── v8-series/           第五系列六(JS 引擎执行管线,00-05)
-└── prometheus-series/   第五系列七(监控 TSDB,00-06)
+├── prometheus-series/   第五系列七(监控 TSDB,00-06)
+├── duckdb-series/       第五系列九(嵌入式 OLAP 三卷,00-18)
+├── boltdb-series/       第五系列十四(嵌入式 KV 卷一,00-06)
+├── wireshark-series/    第五系列十五(抓包与解析卷一,00-06)
+├── envoy-series/ nats-series/ opencv-series/ systemd-series/ 等
 ```
 
 ## 三、统一规范(质量红线)
@@ -105,4 +111,5 @@ source-code-deepdive/
 - 2026-09-15 凌晨:《Prometheus 深读》卷一(7 篇)夜间批次交付;总目录收录 Prometheus;
 - 2026-09-15 ~ 17 夜间队列:《MinIO 深读》两卷(11 篇+10 报告)、Docker 卷三/卷四(6 篇)、V8 卷二/卷三(6 篇)、PG 卷四/卷五(6 篇)、curl/Redis/zstd/QuickJS/Git 扩展章(11 篇)连续交付;
 - 2026-09-17 夜:《DuckDB 深读》卷一(7 篇正文+6 报告,基线 7e886f44)交付;README 补齐 MinIO 条目;
-- 下一批:DuckDB 卷二(存储引擎/Parquet/checkpoint)/Wireshark(镜像方案)/扩展卷。
+- 2026-09-19 ~ 09-20 凌晨:五批次连续交付——BoltDB 卷一(新系列,fd01fc79)、Wireshark 卷一(新系列,v4.7.3,gitcode gh_mirrors/wi 镜像一次成功)、OpenCV 卷二(features2d/calib3d/video/gapi/objdetect/photo+stitching)、DuckDB 卷三(ART/表达式执行/Join/CSV 与工程/Profiler/扩展体系)、systemd 卷三(nspawn/homed/加密与 TPM2/importd+portabled/sysupdate/creds);共 30 篇正文 + 30 份报告,子代理约 1.48 亿 tokens。
+- 下一批候选:OpenCV 卷三 / DuckDB 卷四 / systemd 卷四 / Caddy 扩展卷 / gitcode 镜像方法论沉淀。
